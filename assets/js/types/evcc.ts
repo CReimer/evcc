@@ -168,6 +168,14 @@ export interface State {
   startupCompleted?: boolean;
   /** HTTP API is ready to accept requests. */
   apiReady?: boolean;
+  /** Configured site names in display order. */
+  siteNames?: string[];
+  /** Runtime state of all sites, keyed by site name. */
+  sites?: Record<string, Partial<State>>;
+  /** Read-only aggregate overview is selected. */
+  aggregateMode?: boolean;
+  /** Site summaries used by the aggregate overview. */
+  siteSummaries?: SiteSummary[];
   /** Charging locations. One entry per configured loadpoint. */
   loadpoints: Loadpoint[];
   /** Price, CO₂ and solar production forecasts. */
@@ -335,6 +343,15 @@ export interface State {
   mcp?: boolean;
   /** Instance runs in demo mode. */
   demoMode?: boolean;
+}
+
+export interface SiteSummary {
+  name: string;
+  title: string;
+  gridPower: number;
+  pvPower: number;
+  homePower: number;
+  loadpoints: number;
 }
 
 /** Configuration and runtime status of an integration. */
@@ -516,6 +533,7 @@ export interface ConfigLoadpoint {
   id?: number;
   name?: string;
   disable?: boolean;
+  site?: string;
   charger: string;
   meter: string;
   vehicle: string;

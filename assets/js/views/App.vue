@@ -88,8 +88,7 @@ export default defineComponent({
 			return this.state.startupCompleted;
 		},
 		state() {
-			const { state, uiLoadpoints } = store;
-			return { ...state, uiLoadpoints: uiLoadpoints.value };
+			return { ...store.activeState.value, uiLoadpoints: store.uiLoadpoints.value };
 		},
 		vehicleList() {
 			return vehicleList(this.state.vehicles);
@@ -124,6 +123,11 @@ export default defineComponent({
 		},
 	},
 	watch: {
+		"$route.path"(path) {
+			if (path !== "/" && store.activeSiteName.value === "__all__") {
+				store.selectSite(store.siteNames.value[0] || "");
+			}
+		},
 		version(now) {
 			if (!now) return;
 

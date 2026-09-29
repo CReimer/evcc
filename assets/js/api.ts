@@ -1,6 +1,7 @@
 import axios, { type AxiosResponse } from "axios";
 import { openLoginModal } from "./components/Auth/auth";
 import restart from "./restart";
+import { getActiveSite, siteApiUrl } from "./utils/siteApi";
 
 const { protocol, hostname, port, pathname } = window.location;
 
@@ -27,6 +28,11 @@ const api = axios.create({
     Accept: "application/json",
   },
   paramsSerializer: customParamsSerializer,
+});
+
+api.interceptors.request.use((config) => {
+  config.url = siteApiUrl(config.url || "", getActiveSite());
+  return config;
 });
 
 const errorInterceptor = (error: any) => {
