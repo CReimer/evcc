@@ -524,6 +524,7 @@
 					:chargerValues="deviceValues['charger']"
 					:meters="meters"
 					:circuits="circuits"
+					:siteOptions="siteOptions"
 					:hasDeviceError="hasDeviceError"
 					@changed="loadpointChanged"
 					@dismissed="loadpointDismissed"
@@ -849,6 +850,9 @@ export default defineComponent({
 		return { title: this.$t("config.main.title") };
 	},
 	computed: {
+		siteOptions() {
+			return store.siteSummaries.value.map(({ name: key, title: name }) => ({ key, name }));
+		},
 		activeSlug(): string | undefined {
 			const slug = this.$route.hash.slice(1);
 			return SECTION_TITLES[slug] ? slug : undefined;

@@ -55,6 +55,21 @@
 				/>
 			</FormRow>
 			<FormRow
+				v-if="siteOptions.length > 1"
+				id="loadpointParamSite"
+				:label="$t('config.loadpoint.siteLabel')"
+				:help="$t('config.loadpoint.siteHelp')"
+			>
+				<PropertyField
+					id="loadpointParamSite"
+					v-model="values.site"
+					type="Choice"
+					class="w-100"
+					:choice="siteOptions"
+					required
+				/>
+			</FormRow>
+			<FormRow
 				v-if="charger || !isNew"
 				id="loadpointParamCharger"
 				:label="$t(`config.loadpoint.chargerLabel.${loadpointType}`)"
@@ -682,6 +697,7 @@ const defaultValues = {
 	charger: "",
 	circuit: "",
 	meter: "",
+	site: "",
 } as ConfigLoadpoint;
 
 const defaultThresholds = {
@@ -709,6 +725,7 @@ export default {
 		chargerValues: { type: Object, default: () => {} },
 		meters: { type: Array as PropType<ConfigMeter[]>, default: () => [] },
 		circuits: { type: Array as PropType<ConfigCircuit[]>, default: () => [] },
+		siteOptions: { type: Array as PropType<VehicleOption[]>, default: () => [] },
 		hasDeviceError: {
 			type: Function as PropType<(type: DeviceType, name: string) => boolean>,
 			default: () => false,
@@ -929,6 +946,7 @@ export default {
 		},
 		reset() {
 			this.values = deepClone(defaultValues);
+			this.values.site = this.siteOptions[0]?.key || "";
 			this.autoCreate = false;
 			this.autoCreateInProgress = false;
 			this.updatePhases();

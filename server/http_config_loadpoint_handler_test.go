@@ -24,6 +24,7 @@ func TestLoadpointConfigDisabledNilInstance(t *testing.T) {
 		Data: map[string]any{
 			"charger": "wallbox",
 			"meter":   "lp-meter",
+			"site":    "office",
 			"title":   "Garage",
 			"mode":    "pv", // runtime setting persisted by the settings adapter
 		},
@@ -42,6 +43,7 @@ func TestLoadpointConfigDisabledNilInstance(t *testing.T) {
 	assert.True(t, res.Disable)
 	assert.Equal(t, "wallbox", res.Charger)
 	assert.Equal(t, "lp-meter", res.Meter)
+	assert.Equal(t, "office", res.Site)
 }
 
 // TestDeleteLoadpointDisabledNilInstance ensures deleteLoadpointHandler does not

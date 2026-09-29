@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
 
@@ -144,6 +145,7 @@ func loadpointConfig(dev config.Device[loadpoint.API]) (loadpointFullConfig, err
 		StaticConfig:  getLoadpointStaticConfig(lp),
 		DynamicConfig: getLoadpointDynamicConfig(lp),
 	}
+	res.Site, _ = dev.Config().Other["site"].(string)
 
 	return res, nil
 }
@@ -222,7 +224,9 @@ func newLoadpointHandler() http.HandlerFunc {
 
 		settings := coresettings.NewConfigSettingsAdapter(log, &conf)
 
-		instance, err := core.NewLoadpointFromConfig(log, settings, nil, static)
+		runtimeConfig := maps.Clone(static)
+		delete(runtimeConfig, "site")
+		instance, err := core.NewLoadpointFromConfig(log, settings, nil, runtimeConfig)
 		if err != nil {
 			conf.Delete()
 			jsonError(w, http.StatusBadRequest, err)
