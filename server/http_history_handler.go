@@ -16,6 +16,16 @@ import (
 
 // energyHistoryHandler returns aggregated energy history data
 func energyHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	energyHistoryHandlerForSite("")(w, r)
+}
+
+func energyHistoryHandlerForSite(siteName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		energyHistory(siteName, w, r)
+	}
+}
+
+func energyHistory(siteName string, w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
 		return
@@ -48,10 +58,9 @@ func energyHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	grouped := q.Get("grouped") == "true"
 
-	filter := metrics.EnergyFilter{
-		Group: q.Get("group"),
-		Name:  q.Get("name"),
-		Title: q.Get("title"),
+	filter := metrics.EnergyFilter{Group: q.Get("group"), Name: q.Get("name"), Title: q.Get("title")}
+	if siteName != "" {
+		filter.Site = &siteName
 	}
 
 	res, err := metrics.QueryEnergy(from, to, aggregate, grouped, filter)

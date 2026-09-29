@@ -117,9 +117,9 @@ func (h *SocketHub) welcome(subscriber *socketSubscriber, params []util.Param) {
 	sharders := make(map[string]util.Sharder)
 
 	for _, p := range params {
-		k := p.Key
-		if p.Loadpoint != nil {
-			k = "loadpoints." + p.UniqueID()
+		k := p.UniqueID()
+		if p.Site == "" && p.Loadpoint != nil {
+			k = "loadpoints." + k
 		}
 
 		// Sharder values are split into shards and sent as a separate message
@@ -156,9 +156,9 @@ func (h *SocketHub) broadcast(p util.Param) {
 
 	msg := make(map[string]json.RawMessage)
 
-	k := p.Key
-	if p.Loadpoint != nil {
-		k = "loadpoints." + p.UniqueID()
+	k := p.UniqueID()
+	if p.Site == "" && p.Loadpoint != nil {
+		k = "loadpoints." + k
 	}
 
 	// Sharder splits data into chunks

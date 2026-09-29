@@ -163,10 +163,25 @@ func (s *HTTPd) Router() *mux.Router {
 
 // RegisterSiteHandlers connects the http handlers to the site
 func (s *HTTPd) RegisterSiteHandlers(site site.API) {
+	s.registerSiteHandlers("/api", "", site)
+}
+
+// RegisterPrimarySiteHandlers connects the compatibility API to a named primary site.
+func (s *HTTPd) RegisterPrimarySiteHandlers(name string, site site.API) {
+	s.registerSiteHandlers("/api", name, site)
+}
+
+// RegisterNamedSiteHandlers connects handlers for an additional site below its
+// stable API namespace.
+func (s *HTTPd) RegisterNamedSiteHandlers(name string, site site.API) {
+	s.registerSiteHandlers("/api/sites/"+name, name, site)
+}
+
+func (s *HTTPd) registerSiteHandlers(prefix, siteName string, site site.API) {
 	router := s.Server.Handler.(*mux.Router)
 
 	// api
-	api := router.PathPrefix("/api").Subrouter()
+	api := router.PathPrefix(prefix).Subrouter()
 	api.Use(jsonHandler)
 	api.Use(handlers.CompressHandler)
 	api.Use(handlers.CORS(
@@ -203,11 +218,11 @@ func (s *HTTPd) RegisterSiteHandlers(site site.API) {
 		"smartfeedin":                     {"POST", "/smartfeedinprioritylimit/{value:-?[0-9.]+}", updateSmartCostLimit(site, smartFeedInPriorityLimit)},
 		"smartfeedindelete":               {"DELETE", "/smartfeedinprioritylimit", updateSmartCostLimit(site, smartFeedInPriorityLimit)},
 		"tariff":                          {"GET", "/tariff/{tariff:[a-z0-9]+}", tariffHandler(site)},
-		"sessions":                        {"GET", "/sessions", sessionHandler},
-		"updatesession":                   {"PUT", "/session/{id:[0-9]+}", updateSessionHandler},
-		"deletesession":                   {"DELETE", "/session/{id:[0-9]+}", deleteSessionHandler},
-		"gridsessions":                    {"GET", "/gridsessions", gridSessionsHandler},
-		"energyhistory":                   {"GET", "/history/energy", energyHistoryHandler},
+		"sessions":                        {"GET", "/sessions", sessionHandlerForSite(siteName)},
+		"updatesession":                   {"PUT", "/session/{id:[0-9]+}", updateSessionHandlerForSite(siteName)},
+		"deletesession":                   {"DELETE", "/session/{id:[0-9]+}", deleteSessionHandlerForSite(siteName)},
+		"gridsessions":                    {"GET", "/gridsessions", gridSessionsHandlerForSite(siteName)},
+		"energyhistory":                   {"GET", "/history/energy", energyHistoryHandlerForSite(siteName)},
 		"optimize":                        {"POST", "/optimize", callHandler(site.Optimize)},
 		"telemetry2":                      {"POST", "/settings/telemetry/{value:[01truefalse]+}", boolHandler(telemetry.Enable, telemetry.Enabled)},
 		"devicecolors":                    {"PUT", "/devicecolors", updateDeviceColor(site)},
@@ -280,7 +295,7 @@ func (s *HTTPd) RegisterSiteHandlers(site site.API) {
 }
 
 // RegisterSystemHandler provides system level handlers
-func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *util.ParamCache, auth auth.Auth, shutdown func(), configFile string, remoteAccess *remote.Remote) {
+func (s *HTTPd) RegisterSystemHandler(site *core.Site, sites map[string]site.API, pub publisher, cache *util.ParamCache, auth auth.Auth, shutdown func(), configFile string, remoteAccess *remote.Remote) {
 	router := s.Server.Handler.(*mux.Router)
 
 	// api
@@ -407,6 +422,7 @@ func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *uti
 		} {
 			api.Methods(r.Methods()...).Path(r.Pattern).Handler(r.HandlerFunc)
 		}
+		registerSiteConfigHandlers(api, sites)
 
 		// tariffs
 		for _, r := range map[string]route{

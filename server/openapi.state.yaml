@@ -20,6 +20,24 @@ components:
         apiReady:
           description: HTTP API is ready to accept requests.
           type: boolean
+        siteNames:
+          description: Configured site names in display order.
+          type: array
+          items:
+            type: string
+        sites:
+          description: Runtime state of additional sites, keyed by site name.
+          type: object
+          additionalProperties:
+            type: object
+        aggregateMode:
+          description: Read-only aggregate overview is selected.
+          type: boolean
+        siteSummaries:
+          description: Site summaries used by the aggregate overview.
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteSummary"
         loadpoints:
           description: Charging locations. One entry per configured loadpoint.
           type: array
@@ -1676,6 +1694,28 @@ components:
       required:
         - vendorId
         - deviceId
+    SiteSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        title:
+          type: string
+        gridPower:
+          type: number
+        pvPower:
+          type: number
+        homePower:
+          type: number
+        loadpoints:
+          type: number
+      required:
+        - name
+        - title
+        - gridPower
+        - pvPower
+        - homePower
+        - loadpoints
     SmartCostType:
       description: Type of the smart charging limit.
       type: string

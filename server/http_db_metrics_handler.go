@@ -52,6 +52,9 @@ func deleteEnergyHandler(w http.ResponseWriter, r *http.Request) {
 		Name:  q.Get("name"),
 		Title: q.Get("title"),
 	}
+	if site := q.Get("site"); site != "" {
+		filter.Site = &site
+	}
 
 	rows, err := metrics.DeleteEnergy(from, to, filter)
 	if err != nil {
@@ -78,7 +81,7 @@ func deleteTariffsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := metrics.DeleteTariffs(from, to, r.URL.Query().Get("usage"))
+	rows, err := metrics.DeleteSiteTariffs(r.URL.Query().Get("site"), from, to, r.URL.Query().Get("usage"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, metrics.ErrInvalidUsage) {

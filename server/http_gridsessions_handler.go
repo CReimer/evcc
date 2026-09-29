@@ -13,6 +13,16 @@ import (
 
 // gridSessionsHandler returns the list of grid sessions
 func gridSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	gridSessionsHandlerForSite("")(w, r)
+}
+
+func gridSessionsHandlerForSite(siteName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		gridSessions(siteName, w, r)
+	}
+}
+
+func gridSessions(siteName string, w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
 		return
@@ -20,7 +30,11 @@ func gridSessionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var res smartgrid.GridSessions
 
-	if txn := db.Instance.Order("created DESC").Find(&res); txn.Error != nil {
+	txn := db.Instance.Order("created DESC")
+	if siteName != "" {
+		txn = txn.Where("site = ?", siteName)
+	}
+	if txn = txn.Find(&res); txn.Error != nil {
 		jsonError(w, http.StatusInternalServerError, txn.Error)
 		return
 	}

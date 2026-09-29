@@ -34,3 +34,23 @@ func TestSessionHandlerTimezoneFilter(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Len(t, got, 1)
 }
+
+func TestSessionHandlerSiteIsolation(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(session.Session)))
+	now := time.Now()
+	require.NoError(t, db.Instance.Create(&[]session.Session{
+		{Site: "home_1", Loadpoint: "garage", Created: now, Finished: now, ChargedEnergy: 1},
+		{Site: "homeA1", Loadpoint: "garage", Created: now, Finished: now, ChargedEnergy: 2},
+	}).Error)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	sessionHandlerForSite("home_1")(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got session.Sessions
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got, 1)
+	require.Equal(t, 1.0, got[0].ChargedEnergy)
+}

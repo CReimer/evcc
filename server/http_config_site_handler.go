@@ -6,7 +6,16 @@ import (
 	"github.com/evcc-io/evcc/core/site"
 	"github.com/evcc-io/evcc/db/settings"
 	"github.com/evcc-io/evcc/util/config"
+	"github.com/gorilla/mux"
 )
+
+func registerSiteConfigHandlers(router *mux.Router, sites map[string]site.API) {
+	for name, configuredSite := range sites {
+		path := "/sites/" + name
+		router.Methods(http.MethodGet).Path(path).Handler(siteHandler(configuredSite))
+		router.Methods(http.MethodPut, http.MethodOptions).Path(path).Handler(updateSiteHandler(configuredSite))
+	}
+}
 
 // siteHandler returns a device configurations by class
 func siteHandler(site site.API) http.HandlerFunc {

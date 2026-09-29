@@ -169,7 +169,13 @@ func (m *Influx) writeComplexPoint(writer pointWriter, key string, val any, tags
 }
 
 // Run Influx publisher
-func (m *Influx) Run(site site.API, in <-chan util.Param) {
+func (m *Influx) Run(singleSite site.API, in <-chan util.Param) {
+	m.RunSites(map[string]site.API{"": singleSite}, in)
+}
+
+// RunSites publishes values for multiple sites and adds a site tag for named
+// site measurements.
+func (m *Influx) RunSites(sites map[string]site.API, in <-chan util.Param) {
 	writer := m.client.WriteAPI(m.org, m.database)
 
 	// log errors
@@ -183,6 +189,13 @@ func (m *Influx) Run(site site.API, in <-chan util.Param) {
 	// add points to batch for async writing
 	for param := range in {
 		tags := make(map[string]string)
+		site := sites[param.Site]
+		if site == nil {
+			continue
+		}
+		if param.Site != "" {
+			tags["site"] = param.Site
+		}
 		if param.Loadpoint != nil {
 			lp := site.Loadpoints()[*param.Loadpoint]
 			if lp == nil {

@@ -52,6 +52,16 @@ func exportResult(ctx context.Context, w http.ResponseWriter, format string, res
 
 // sessionHandler returns the list of charging sessions
 func sessionHandler(w http.ResponseWriter, r *http.Request) {
+	sessionHandlerForSite("")(w, r)
+}
+
+func sessionHandlerForSite(siteName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessionsHandler(siteName, w, r)
+	}
+}
+
+func sessionsHandler(siteName string, w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
 		return
@@ -77,6 +87,9 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 			filename += "-" + month
 			push("STRFTIME('%m', created, 'localtime') LIKE ?", month)
 		}
+	}
+	if siteName != "" {
+		push("site = ?", siteName)
 	}
 
 	// TODO support other databases than Sqlite
@@ -121,6 +134,16 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 
 // deleteSessionHandler removes session in sessions table with given id
 func deleteSessionHandler(w http.ResponseWriter, r *http.Request) {
+	deleteSessionHandlerForSite("")(w, r)
+}
+
+func deleteSessionHandlerForSite(siteName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deleteSession(siteName, w, r)
+	}
+}
+
+func deleteSession(siteName string, w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
 		return
@@ -131,7 +154,11 @@ func deleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	if txn := db.Instance.Table("sessions").Delete(&res, id); txn.Error != nil {
+	txn := db.Instance.Table("sessions").Where("id = ?", id)
+	if siteName != "" {
+		txn = txn.Where("site = ?", siteName)
+	}
+	if txn = txn.Delete(&res); txn.Error != nil {
 		jsonError(w, http.StatusBadRequest, txn.Error)
 		return
 	}
@@ -141,6 +168,16 @@ func deleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 // updateSessionHandler updates the data of an existing session
 func updateSessionHandler(w http.ResponseWriter, r *http.Request) {
+	updateSessionHandlerForSite("")(w, r)
+}
+
+func updateSessionHandlerForSite(siteName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		updateSession(siteName, w, r)
+	}
+}
+
+func updateSession(siteName string, w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
 		return
@@ -171,7 +208,11 @@ func updateSessionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if txn := db.Instance.Table("sessions").Where("id = ?", id).Updates(updates); txn.Error != nil {
+	txn := db.Instance.Table("sessions").Where("id = ?", id)
+	if siteName != "" {
+		txn = txn.Where("site = ?", siteName)
+	}
+	if txn = txn.Updates(updates); txn.Error != nil {
 		jsonError(w, http.StatusBadRequest, txn.Error)
 		return
 	}

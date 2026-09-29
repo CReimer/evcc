@@ -16,6 +16,7 @@ import (
 	"github.com/evcc-io/evcc/charger/ocpp"
 	"github.com/evcc-io/evcc/core"
 	"github.com/evcc-io/evcc/core/keys"
+	siteapi "github.com/evcc-io/evcc/core/site"
 	"github.com/evcc-io/evcc/db"
 	"github.com/evcc-io/evcc/hems/hems"
 	"github.com/evcc-io/evcc/messenger"
@@ -303,8 +304,12 @@ func runRoot(cmd *cobra.Command, args []string) {
 
 	// setup site and loadpoints
 	var site *core.Site
+	var sites []configuredSite
 	if err == nil {
-		site, err = configureSiteAndLoadpoints(&conf)
+		sites, err = configureSitesAndLoadpoints(&conf)
+		if len(sites) > 0 {
+			site = sites[0].site
+		}
 	}
 
 	// setup influx
@@ -315,6 +320,14 @@ func runRoot(cmd *cobra.Command, args []string) {
 		}
 
 		if err == nil && influx != nil {
+			influxSites := make(map[string]siteapi.API, len(sites))
+			for _, configured := range sites {
+				name := configured.name
+				if len(sites) == 1 {
+					name = ""
+				}
+				influxSites[name] = configured.site
+			}
 			// eliminate duplicate values
 			dedupe := pipe.NewDeduplicator(30*time.Minute,
 				keys.VehicleSoc,
@@ -330,7 +343,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 				keys.TariffSolar,
 				keys.ChargedEnergy,
 				keys.ChargeRemainingEnergy)
-			go influx.Run(site, dedupe.Pipe(
+			go influx.RunSites(influxSites, dedupe.Pipe(
 				pipe.NewDropper(append(ignoreLogs, ignoreEmpty, keys.Forecast)...).Pipe(tee.Attach()),
 			))
 		}
@@ -339,14 +352,38 @@ func runRoot(cmd *cobra.Command, args []string) {
 	// signal devices initialized
 	valueChan <- util.Param{Key: keys.StartupCompleted, Val: true}
 	// show onboarding UI
-	valueChan <- util.Param{Key: keys.SetupRequired, Val: site == nil || !site.IsConfigured()}
+	setupRequired := site == nil
+	for _, configured := range sites {
+		setupRequired = setupRequired || configured.site == nil || !configured.site.IsConfigured()
+	}
+	valueChan <- util.Param{Key: keys.SetupRequired, Val: setupRequired}
+	valueChan <- util.Param{Key: keys.Sites, Val: lo.Map(sites, func(site configuredSite, _ int) string { return site.name })}
 
 	// setup mqtt publisher
 	if err == nil && conf.Mqtt.Broker != "" && conf.Mqtt.Topic != "" {
-		var mqtt *server.MQTT
-		mqtt, err = server.NewMQTT(strings.Trim(conf.Mqtt.Topic, "/"), site)
-		if err == nil {
-			go mqtt.Run(site, pipe.NewDropper(append(ignoreMqtt, ignoreEmpty)...).Pipe(tee.Attach()))
+		root := strings.Trim(conf.Mqtt.Topic, "/")
+		for _, configured := range sites {
+			topic, siteName := root, ""
+			if len(sites) > 1 {
+				topic += "/sites/" + configured.name
+				siteName = configured.name
+			}
+			var mqtt *server.MQTT
+			mqtt, err = server.NewMQTT(topic, configured.site)
+			if err != nil {
+				break
+			}
+			input := pipe.NewSiteFilter(siteName).Pipe(tee.Attach())
+			go mqtt.Run(configured.site, pipe.NewDropper(append(ignoreMqtt, ignoreEmpty)...).Pipe(input))
+		}
+		if err == nil && len(sites) > 1 {
+			mqtt, mqttErr := server.NewMQTT(root, sites[0].site)
+			if mqttErr != nil {
+				err = mqttErr
+			} else {
+				input := pipe.NewSiteFilter("").Pipe(tee.Attach())
+				go mqtt.Run(sites[0].site, pipe.NewDropper(append(ignoreMqtt, ignoreEmpty)...).Pipe(input))
+			}
 		}
 	}
 
@@ -365,16 +402,31 @@ func runRoot(cmd *cobra.Command, args []string) {
 	// start HEMS server
 	var hemsInstance hems.API
 	if err == nil {
-		hemsInstance, err = configureHEMS(&conf.HEMS, site)
-		if err != nil {
-			err = wrapErrorWithClass(ClassHEMS, err)
-		} else if hemsInstance != nil {
-			// republish when HEMS state updates
-			hemsInstance.SetUpdated(func() {
-				valueChan <- util.Param{Key: keys.Hems, Val: globalconfig.ConfigStatus{
+		for id, configured := range sites {
+			hemsConf := configured.hems
+			if id == 0 && len(conf.Sites) == 0 {
+				hemsConf = conf.HEMS
+			} else if hemsConf.Type == "" {
+				continue
+			}
+
+			instance, hemsErr := configureHEMS(&hemsConf, configured.site)
+			if hemsErr != nil {
+				err = wrapErrorWithClass(ClassHEMS, fmt.Errorf("site %s: %w", configured.name, hemsErr))
+				break
+			}
+			if id == 0 {
+				hemsInstance = instance
+			}
+			if instance == nil {
+				continue
+			}
+
+			publish := func() {
+				param := util.Param{Key: keys.Hems, Val: globalconfig.ConfigStatus{
 					Config: struct {
 						Configured bool `json:"configured"`
-					}{hemsInstance != nil},
+					}{true},
 					YamlSource: yamlSource.hems,
 					Status: struct {
 						Dimmed              *bool    `json:"dimmed,omitempty"`
@@ -382,13 +434,23 @@ func runRoot(cmd *cobra.Command, args []string) {
 						MaxConsumptionPower *float64 `json:"maxConsumptionPower,omitempty"`
 						MaxProductionPower  *float64 `json:"maxProductionPower,omitempty"`
 					}{
-						Dimmed:              hems.Dimmed(hemsInstance),
-						Curtailed:           hemsInstance.CurtailedPercent(),
-						MaxConsumptionPower: hemsInstance.MaxConsumptionPower(),
-						MaxProductionPower:  hemsInstance.MaxProductionPower(),
+						Dimmed:              hems.Dimmed(instance),
+						Curtailed:           instance.CurtailedPercent(),
+						MaxConsumptionPower: instance.MaxConsumptionPower(),
+						MaxProductionPower:  instance.MaxProductionPower(),
 					},
 				}}
-			})
+				if len(sites) > 1 {
+					param.Site = configured.name
+				}
+				valueChan <- param
+				if id == 0 && len(sites) > 1 {
+					param.Site = ""
+					valueChan <- param
+				}
+			}
+			instance.SetUpdated(publish)
+			publish()
 		}
 	}
 
@@ -411,7 +473,15 @@ func runRoot(cmd *cobra.Command, args []string) {
 	// setup messaging
 	var pushChan chan messenger.Event
 	if err == nil {
-		pushChan, err = configureMessengers(&conf.Messaging, &conf.MessagingEvents, site.Vehicles())
+		messengerVehicles := make(map[string]messenger.Vehicles, len(sites))
+		for _, configured := range sites {
+			name := configured.name
+			if len(conf.Sites) == 0 {
+				name = ""
+			}
+			messengerVehicles[name] = configured.site.Vehicles()
+		}
+		pushChan, err = configureMessengersForSites(&conf.Messaging, &conf.MessagingEvents, messengerVehicles)
 		err = wrapErrorWithClass(ClassMessenger, err)
 	}
 
@@ -501,7 +571,11 @@ func runRoot(cmd *cobra.Command, args []string) {
 		valueChan <- util.Param{Key: keys.DemoMode, Val: true}
 	}
 
-	httpd.RegisterSystemHandler(site, func(k string, v any) {
+	configuredSites := make(map[string]siteapi.API, len(sites))
+	for _, configured := range sites {
+		configuredSites[configured.name] = configured.site
+	}
+	httpd.RegisterSystemHandler(site, configuredSites, func(k string, v any) {
 		valueChan <- util.Param{Key: k, Val: v}
 	}, cache, authObject, func() {
 		log.INFO.Println("evcc was stopped by user. OS should restart the service. Or restart manually.")
@@ -514,17 +588,30 @@ func runRoot(cmd *cobra.Command, args []string) {
 		go updater.Run(log, httpd, valueChan)
 	}
 
-	// setup site
+	// setup sites
 	if err == nil {
-		// set channels
-		site.DumpConfig()
-		site.Prepare(valueChan, pushChan)
+		for id, configured := range sites {
+			configured.site.DumpConfig()
 
-		httpd.RegisterSiteHandlers(site)
+			siteValues := valueChan
+			stateSite := ""
+			if len(sites) > 1 {
+				siteValues = scopedSiteValues(valueChan, configured.name, id == 0)
+				stateSite = configured.name
+			}
+			configured.site.PrepareScoped(siteValues, pushChan, stateSite)
 
-		go func() {
-			site.Run(stopC, conf.Interval)
-		}()
+			if id == 0 {
+				if len(sites) > 1 {
+					httpd.RegisterPrimarySiteHandlers(configured.name, configured.site)
+				} else {
+					httpd.RegisterSiteHandlers(configured.site)
+				}
+			}
+			httpd.RegisterNamedSiteHandlers(configured.name, configured.site)
+
+			go configured.site.Run(stopC, conf.Interval)
+		}
 	}
 
 	// signal HTTP API ready
