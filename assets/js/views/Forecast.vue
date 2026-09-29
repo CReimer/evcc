@@ -3,7 +3,15 @@
 		class="container px-4 safe-area-inset d-flex flex-column"
 		:class="{ 'empty-container': !forecastAvailable }"
 	>
-		<TopHeader :title="$t('forecast.modalTitle')" />
+		<TopHeader
+			:title="$t('forecast.modalTitle')"
+			:site-names="siteNames"
+			:active-site="activeSite"
+			:site-titles="siteTitles"
+			:site-selector-as-title="false"
+			:include-aggregate="false"
+			@site-select="selectSite"
+		/>
 		<div v-if="!forecastAvailable" class="flex-grow-1 d-flex">
 			<div class="empty-box d-flex flex-column p-5">
 				<ul class="list-unstyled mb-4">
@@ -172,6 +180,17 @@ export default defineComponent({
 		return { title: this.$t("forecast.modalTitle") };
 	},
 	computed: {
+		siteNames() {
+			return store.siteNames.value;
+		},
+		activeSite() {
+			return store.activeSiteName.value;
+		},
+		siteTitles() {
+			return Object.fromEntries(
+				store.siteSummaries.value.map(({ name, title }) => [name, title])
+			);
+		},
 		forecast() {
 			return store.uiForecast.value;
 		},
@@ -232,13 +251,13 @@ export default defineComponent({
 			return slots * 4 + 56;
 		},
 		currency() {
-			return store.state?.currency;
+			return store.activeState.value.currency;
 		},
 		experimental() {
 			return store.state?.experimental;
 		},
 		solarAdjusted() {
-			return store.state?.solarAdjusted;
+			return store.activeState.value.solarAdjusted;
 		},
 		priceZoom() {
 			return settings.priceZoom;
@@ -275,6 +294,9 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		selectSite(name: string) {
+			store.selectSite(name);
+		},
 		async changeAdjusted(e: Event) {
 			try {
 				await api.post(

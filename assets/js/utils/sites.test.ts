@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
-import type { State } from "@/types/evcc";
-import { aggregateState, stateForSite, summarizeSites } from "./sites";
+import type { ConfigLoadpoint, State } from "@/types/evcc";
+import { aggregateState, loadpointsForSite, stateForSite, summarizeSites } from "./sites";
 
 const state = {
   offline: false,
@@ -30,6 +30,16 @@ const state = {
 } as unknown as State;
 
 describe("multi-site state", () => {
+  test("assigns legacy loadpoints to the primary site", () => {
+    const loadpoints = [
+      { title: "Garage" },
+      { title: "Office", site: "office" },
+    ] as ConfigLoadpoint[];
+
+    expect(loadpointsForSite(loadpoints, ["home", "office"], "home")).toHaveLength(1);
+    expect(loadpointsForSite(loadpoints, ["home", "office"], "office")).toHaveLength(1);
+  });
+
   test("resolves primary and additional sites", () => {
     expect(stateForSite(state, "home").siteTitle).toBe("Home");
     expect(stateForSite(state, "office").siteTitle).toBe("Office");

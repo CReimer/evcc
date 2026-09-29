@@ -2,8 +2,7 @@
 	<JsonModal
 		name="title"
 		:title="$t('config.title.title')"
-		endpoint="/config/site"
-		state-key="siteTitle"
+		:endpoint="endpoint"
 		save-method="put"
 		:transform-read-values="transformReadValues"
 		disable-remove
@@ -28,10 +27,14 @@ import FormRow from "./FormRow.vue";
 export default {
 	name: "TitleModal",
 	components: { FormRow, JsonModal },
+	props: {
+		endpoint: { type: String, default: "/config/site" },
+		value: { type: String, default: "" },
+	},
 	emits: ["changed"],
 	methods: {
-		transformReadValues(siteTitle) {
-			return { title: siteTitle };
+		transformReadValues() {
+			return { title: this.value };
 		},
 	},
 };

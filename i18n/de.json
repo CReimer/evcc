@@ -550,6 +550,8 @@
       "priorityHelp": "Höherer Prioritäten haben Vorrang beim PV-Überschuss.",
       "priorityLabel": "Priorität",
       "save": "Speichern",
+      "siteHelp": "Der Standort steuert diesen Ladepunkt nach dem nächsten Neustart.",
+      "siteLabel": "Standort",
       "solarBehaviorCustomHelp": "Definiere eigene Ein- und Ausschaltschwellen und Verzögerungen.",
       "solarBehaviorDefaultHelp": "Start nach {enableDelay} ausreichend vorhandenem Überschuss. Stop wenn für {disableDelay} nicht genug Überschuss vorhanden ist.",
       "solarBehaviorLabel": "PV-Überschuss",
@@ -1565,6 +1567,17 @@
     "provider": {
       "login": "anmelden",
       "logout": "abmelden"
+    },
+    "multiSite": {
+      "grid": "Netzleistung",
+      "home": "Hausverbrauch",
+      "loadpoints": "Ladepunkte",
+      "pv": "Solarleistung",
+      "title": "Alle Standorte"
+    },
+    "siteSelector": {
+      "all": "Alle Standorte",
+      "label": "Standort auswählen"
     },
     "startConfiguration": "Konfiguration beginnen",
     "targetCharge": {

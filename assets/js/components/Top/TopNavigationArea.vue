@@ -5,7 +5,7 @@
 			:loadpoints="loadpoints"
 			class="d-flex align-items-center"
 		/>
-		<Savings v-bind="savings" />
+		<Savings v-if="showSavings" v-bind="savings" />
 		<AuthProviderModal :provider="authProvider" />
 	</div>
 </template>
@@ -29,6 +29,7 @@ export default defineComponent({
 	},
 	props: {
 		notifications: { type: Array as PropType<Notification[]>, default: () => [] },
+		showSavings: { type: Boolean, default: true },
 	},
 	data() {
 		return {
@@ -39,13 +40,13 @@ export default defineComponent({
 	computed: {
 		savings() {
 			return {
-				sponsor: store.state.sponsor,
-				statistics: store.state.statistics,
-				co2Configured: store.state.tariffCo2 !== undefined,
-				currency: store.state.currency,
+				sponsor: store.activeState.value.sponsor,
+				statistics: store.activeState.value.statistics,
+				co2Configured: store.activeState.value.tariffCo2 !== undefined,
+				currency: store.activeState.value.currency,
 				telemetry: store.state.telemetry,
 				forecast: store.uiForecast.value,
-				tariffGrid: store.state.tariffGrid,
+				tariffGrid: store.activeState.value.tariffGrid,
 			};
 		},
 		loadpoints() {

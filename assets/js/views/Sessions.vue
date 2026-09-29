@@ -1,6 +1,15 @@
 <template>
 	<div class="container px-4 safe-area-inset">
-		<TopHeader :title="$t('sessions.title')" :notifications="notifications" />
+		<TopHeader
+			:title="$t('sessions.title')"
+			:notifications="notifications"
+			:site-names="siteNames"
+			:active-site="activeSite"
+			:site-titles="siteTitles"
+			:site-selector-as-title="false"
+			:include-aggregate="false"
+			@site-select="selectSite"
+		/>
 		<div class="row">
 			<main class="col-12">
 				<PeriodHeader>
@@ -211,6 +220,7 @@ import { TYPES, GROUPS, PERIODS, type Session } from "../components/Sessions/typ
 import { defineComponent, type PropType } from "vue";
 import { CURRENCY, type Notification } from "@/types/evcc";
 import vehicleList from "@/utils/vehicleList";
+import { siteApiUrl } from "@/utils/siteApi";
 
 export default defineComponent({
 	name: "Sessions",
@@ -261,11 +271,22 @@ export default defineComponent({
 		return { title: this.$t("sessions.title") };
 	},
 	computed: {
+		siteNames() {
+			return store.siteNames.value;
+		},
+		activeSite() {
+			return store.activeSiteName.value;
+		},
+		siteTitles() {
+			return Object.fromEntries(
+				store.siteSummaries.value.map(({ name, title }) => [name, title])
+			);
+		},
 		selectedGroupWithoutNone() {
 			return this.selectedGroup !== this.groups.NONE ? this.selectedGroup : undefined;
 		},
 		currency() {
-			return store.state.currency || CURRENCY.EUR;
+			return store.activeState.value.currency || CURRENCY.EUR;
 		},
 		energyTitle() {
 			return this.$t("sessions.chartTitle.energy");
@@ -467,7 +488,7 @@ export default defineComponent({
 			return vehicleList(store.state.vehicles);
 		},
 		loadpointList() {
-			const loadpoints = store.state.loadpoints || [];
+			const loadpoints = store.activeState.value.loadpoints || [];
 			return loadpoints.map(({ title }) => title);
 		},
 		selectedSession() {
@@ -479,7 +500,7 @@ export default defineComponent({
 			return this.fmtMonth(date, false);
 		},
 		deviceColors(): DeviceColors {
-			return deviceColorMap(store.state.deviceColors);
+			return deviceColorMap(store.activeState.value.deviceColors);
 		},
 		colorMappings() {
 			// alphabetical keys for stable palette assignment; manual overrides win
@@ -563,11 +584,17 @@ export default defineComponent({
 		offline() {
 			this.loadSessions();
 		},
+		activeSite() {
+			this.loadSessions();
+		},
 	},
 	mounted() {
 		this.loadSessions();
 	},
 	methods: {
+		selectSite(name: string) {
+			store.selectSite(name);
+		},
 		changePeriod(newPeriod: PERIODS) {
 			let month: number | undefined = this.month;
 			let year: number | undefined = this.year;
@@ -608,7 +635,9 @@ export default defineComponent({
 			if (this.period === PERIODS.MONTH) {
 				params.append("month", this.month.toString());
 			}
-			return `./api/sessions?${params.toString()}`;
+			const site = this.siteNames.length > 1 ? this.activeSite : null;
+			const path = siteApiUrl(`sessions?${params.toString()}`, site);
+			return `./api/${path}`;
 		},
 		updateType(type: TYPES) {
 			this.selectedType = type;

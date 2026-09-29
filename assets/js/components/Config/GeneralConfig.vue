@@ -83,14 +83,13 @@ export default {
 	props: {
 		sponsorError: Boolean,
 		experimental: Boolean,
+		title: String,
+		currency: String,
 	},
 	emits: ["site-changed"],
 	computed: {
 		authDisabled() {
 			return store.state?.authDisabled === true;
-		},
-		title() {
-			return store.state?.siteTitle || "";
 		},
 		telemetryEnabled() {
 			return store.state?.telemetry === true;
@@ -101,9 +100,6 @@ export default {
 		controlStatus() {
 			const sec = store.state?.interval;
 			return sec ? this.fmtDuration(sec) : "";
-		},
-		currency() {
-			return store.state?.currency || "EUR";
 		},
 		sponsorStatus() {
 			const sponsor = store.state?.sponsor || {};

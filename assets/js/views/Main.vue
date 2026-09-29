@@ -4,6 +4,11 @@
 		v-bind="state"
 		:forecast="uiForecast"
 		:selected-loadpoint-index="selectedLoadpointIndex"
+		:site-names="siteNames"
+		:active-site="activeSite"
+		:site-titles="siteTitles"
+		:ui-loadpoints="uiLoadpoints"
+		@site-select="selectSite"
 	/>
 </template>
 
@@ -22,14 +27,33 @@ export default defineComponent({
 	},
 	computed: {
 		state() {
-			return store.state;
+			return store.activeState.value;
 		},
 		uiForecast() {
 			return store.uiForecast.value;
 		},
+		uiLoadpoints() {
+			return store.uiLoadpoints.value;
+		},
+		siteNames() {
+			return store.siteNames.value;
+		},
+		activeSite() {
+			return store.activeSiteName.value;
+		},
+		siteTitles() {
+			return Object.fromEntries(
+				store.siteSummaries.value.map(({ name, title }) => [name, title])
+			);
+		},
+	},
+	methods: {
+		selectSite(name: string) {
+			store.selectSite(name);
+		},
 	},
 	head() {
-		const title = store.state.siteTitle;
+		const title = store.activeState.value.siteTitle;
 		if (title) {
 			return { title };
 		}

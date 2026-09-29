@@ -550,6 +550,8 @@
       "priorityHelp": "Higher priority get preferred access to solar surplus.",
       "priorityLabel": "Priority",
       "save": "Save",
+      "siteHelp": "The site controls this loadpoint after the next restart.",
+      "siteLabel": "Site",
       "solarBehaviorCustomHelp": "Define your own enable and disable thresholds and delays.",
       "solarBehaviorDefaultHelp": "Start after {enableDelay} of sufficient surplus. Stop when there is not enough surplus for {disableDelay}.",
       "solarBehaviorLabel": "Solar",
@@ -1565,6 +1567,17 @@
     "provider": {
       "login": "log in",
       "logout": "log out"
+    },
+    "multiSite": {
+      "grid": "Grid power",
+      "home": "Home consumption",
+      "loadpoints": "Loadpoints",
+      "pv": "Solar power",
+      "title": "All sites"
+    },
+    "siteSelector": {
+      "all": "All sites",
+      "label": "Select site"
     },
     "startConfiguration": "Let's start configuration",
     "targetCharge": {

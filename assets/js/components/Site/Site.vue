@@ -1,9 +1,20 @@
 <template>
 	<div class="d-flex flex-column site safe-area-inset">
 		<div class="container px-4 top-area">
-			<TopHeader :title="headerTitle" :notifications="notifications" />
-			<HemsWarning :status="hems?.status" />
-			<Energyflow v-if="!setupRequired && !hasFatalError" v-bind="energyflow" />
+			<TopHeader
+				:title="headerTitle"
+				:notifications="notifications"
+				:site-names="siteNames"
+				:active-site="activeSite"
+				:site-titles="siteTitles"
+				:show-savings="!aggregateMode"
+				@site-select="$emit('site-select', $event)"
+			/>
+			<HemsWarning v-if="!aggregateMode" :status="hems?.status" />
+			<Energyflow
+				v-if="!aggregateMode && !setupRequired && !hasFatalError"
+				v-bind="energyflow"
+			/>
 		</div>
 		<div class="d-flex flex-column justify-content-between content-area">
 			<div
@@ -39,6 +50,11 @@
 					</router-link>
 				</div>
 			</div>
+			<MultiSiteOverview
+				v-else-if="aggregateMode"
+				:sites="siteSummaries"
+				@select="$emit('site-select', $event)"
+			/>
 			<Loadpoints
 				v-else
 				:key="`loadpoints-${orderedVisibleLoadpoints.length}`"
@@ -71,6 +87,7 @@ import TopHeader from "../Top/Header.vue";
 import Energyflow from "../Energyflow/Energyflow.vue";
 import HemsWarning from "../HemsWarning.vue";
 import Loadpoints from "../Loadpoints/Loadpoints.vue";
+import MultiSiteOverview from "./MultiSiteOverview.vue";
 import formatter from "@/mixins/formatter";
 import collector from "@/mixins/collector.ts";
 import WelcomeIcons from "./WelcomeIcons.vue";
@@ -90,15 +107,17 @@ import type {
 	EvOpt,
 	BATTERY_MODE,
 	Vehicle,
+	SiteSummary,
+	UiLoadpoint,
 } from "@/types/evcc";
 import vehicleList from "@/utils/vehicleList";
-import store from "@/store";
 import type { Grid } from "./types";
 
 export default defineComponent({
 	name: "Site",
 	components: {
 		Loadpoints,
+		MultiSiteOverview,
 		Energyflow,
 		HemsWarning,
 		TopHeader,
@@ -111,6 +130,12 @@ export default defineComponent({
 		notifications: { type: Array as PropType<Notification[]>, default: () => [] },
 		offline: Boolean,
 		setupRequired: Boolean,
+		aggregateMode: Boolean,
+		siteSummaries: { type: Array as PropType<SiteSummary[]>, default: () => [] },
+		siteNames: { type: Array as PropType<string[]>, default: () => [] },
+		activeSite: { type: String, default: "" },
+		siteTitles: { type: Object as PropType<Record<string, string>>, default: () => ({}) },
+		uiLoadpoints: { type: Array as PropType<UiLoadpoint[]>, default: () => [] },
 
 		// details
 		gridConfigured: Boolean,
@@ -151,12 +176,14 @@ export default defineComponent({
 		hems: Object as PropType<ConfigStatus<HemsConfig, HemsStatus>>,
 		evopt: { type: Object as PropType<EvOpt> },
 	},
+	emits: ["site-select"],
 	computed: {
 		headerTitle() {
-			return this.setupRequired ? "" : this.siteTitle || "evcc";
+			if (this.setupRequired) return "";
+			return this.aggregateMode ? this.$t("main.siteSelector.all") : this.siteTitle || "evcc";
 		},
 		loadpoints() {
-			return store.uiLoadpoints.value || [];
+			return this.uiLoadpoints;
 		},
 		enabledLoadpoints() {
 			return this.loadpoints.filter((lp) => !lp.disabled);
@@ -175,9 +202,6 @@ export default defineComponent({
 		},
 		gridPower() {
 			return this.grid?.power || 0;
-		},
-		experimental() {
-			return store.state?.experimental;
 		},
 		energyflow() {
 			return { ...this.collectProps(Energyflow), loadpoints: this.enabledLoadpoints };

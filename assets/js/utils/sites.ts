@@ -1,7 +1,16 @@
-import type { SiteSummary, State } from "@/types/evcc";
+import type { ConfigLoadpoint, SiteSummary, State } from "@/types/evcc";
 
 export function stateForSite(state: State, name: string): Partial<State> {
   return { loadpoints: [], ...state.sites?.[name], vehicles: state.vehicles };
+}
+
+export function loadpointsForSite(
+  loadpoints: ConfigLoadpoint[],
+  siteNames: string[],
+  activeSite: string
+) {
+  const primary = siteNames[0];
+  return loadpoints.filter((loadpoint) => (loadpoint.site || primary) === activeSite);
 }
 
 export function summarizeSites(state: State, names: string[]): SiteSummary[] {

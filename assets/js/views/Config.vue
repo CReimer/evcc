@@ -6,7 +6,13 @@
 				:title="headerTitle"
 				:notifications="notifications"
 				:parent-title="headerParentTitle"
+				:site-names="siteNames"
+				:active-site="activeSite"
+				:site-titles="siteTitles"
+				:site-selector-as-title="false"
+				:include-aggregate="false"
 				@back="goBack"
+				@site-select="selectSite"
 			/>
 			<div class="wrapper position-relative mb-3">
 				<AuthSuccessBanner
@@ -33,6 +39,8 @@
 						class="box-pull-out"
 						:experimental="experimental"
 						:sponsor-error="hasClassError('sponsorship')"
+						:title="siteTitle"
+						:currency="currency"
 						@site-changed="siteChanged"
 					/>
 				</ConfigSection>
@@ -40,7 +48,7 @@
 				<ConfigSection v-bind="sectionProps('loadpoints')">
 					<div class="p-0 config-list box-pull-out">
 						<DeviceCard
-							v-for="loadpoint in loadpoints"
+							v-for="loadpoint in siteLoadpoints"
 							:id="`loadpoint_${loadpoint.name}`"
 							:key="loadpoint.name"
 							:title="loadpoint.title"
@@ -519,12 +527,13 @@
 
 				<LoadpointModal
 					:vehicleOptions="vehicleOptions"
-					:loadpointCount="loadpoints.length"
+					:loadpointCount="siteLoadpoints.length"
 					:chargers="chargers"
 					:chargerValues="deviceValues['charger']"
 					:meters="meters"
 					:circuits="circuits"
 					:siteOptions="siteOptions"
+					:defaultSite="activeSite"
 					:hasDeviceError="hasDeviceError"
 					@changed="loadpointChanged"
 					@dismissed="loadpointDismissed"
@@ -573,7 +582,11 @@
 				<McpModal />
 				<ExperimentalModal :experimental="experimental" />
 				<RemoteModal :remote="remote" :is-sponsor="isSponsor" :site-title="siteTitle" />
-				<TitleModal @changed="loadDirty" />
+				<TitleModal
+					:endpoint="`/config/${siteConfigPath}`"
+					:value="siteTitle"
+					@changed="siteTitleChanged"
+				/>
 				<ModbusProxyModal :is-sponsor="isSponsor" @changed="loadDirty" />
 				<CircuitsLegacyModal
 					:grid-meter="gridMeter"
@@ -699,6 +712,7 @@ import type {
 } from "@/types/evcc";
 import { ConfigType, CURRENCY } from "@/types/evcc";
 import { circuitTree, type CircuitNode } from "@/utils/circuits";
+import { loadpointsForSite } from "@/utils/sites";
 
 type DeviceValuesMap = Record<DeviceType, Record<string, any>>;
 
@@ -850,8 +864,27 @@ export default defineComponent({
 		return { title: this.$t("config.main.title") };
 	},
 	computed: {
+		siteNames() {
+			return store.siteNames.value;
+		},
+		activeSite() {
+			return store.activeSiteName.value;
+		},
+		siteTitles() {
+			return Object.fromEntries(
+				store.siteSummaries.value.map(({ name, title }) => [name, title])
+			);
+		},
 		siteOptions() {
 			return store.siteSummaries.value.map(({ name: key, title: name }) => ({ key, name }));
+		},
+		siteLoadpoints() {
+			return loadpointsForSite(this.loadpoints, this.siteNames, this.activeSite);
+		},
+		siteConfigPath() {
+			return this.siteNames.length > 1
+				? `sites/${encodeURIComponent(this.activeSite)}`
+				: "site";
 		},
 		activeSlug(): string | undefined {
 			const slug = this.$route.hash.slice(1);
@@ -910,7 +943,7 @@ export default defineComponent({
 				{
 					slug: "loadpoints",
 					icon: markRaw(LoadpointIcon),
-					count: this.loadpoints.length,
+					count: this.siteLoadpoints.length,
 					error: this.loadpoints.some((lp) => this.loadpointError(lp)),
 					warning: this.loadpoints.some((lp) => lp.disable),
 				},
@@ -1316,6 +1349,9 @@ export default defineComponent({
 				this.loadAll();
 			}
 		},
+		activeSite() {
+			this.loadSite();
+		},
 	},
 	mounted() {
 		this.isComponentMounted = true;
@@ -1331,6 +1367,9 @@ export default defineComponent({
 		}
 	},
 	methods: {
+		selectSite(name: string) {
+			store.selectSite(name);
+		},
 		isUnconfigured(tags: DeviceTags): boolean {
 			return tags["configured"]?.value === false;
 		},
@@ -1438,7 +1477,7 @@ export default defineComponent({
 			}
 		},
 		async loadSite() {
-			const data = await this.loadConfig("site");
+			const data = await this.loadConfig(this.siteConfigPath);
 			if (data) {
 				this.site = data;
 			}
@@ -1499,7 +1538,7 @@ export default defineComponent({
 				if (name) {
 					const ext = (this.site.ext || []).filter((n) => n !== name);
 					const consumer = [...(this.site.consumer || []), name];
-					await api.put("/config/site", { ext, consumer });
+					await api.put(`/config/${this.siteConfigPath}`, { ext, consumer });
 					await this.loadSite();
 				}
 			}
@@ -1595,10 +1634,14 @@ export default defineComponent({
 		},
 		async saveSite(key: keyof SiteConfig) {
 			const body = key ? { [key]: this.site[key] } : this.site;
-			await api.put("/config/site", body);
+			await api.put(`/config/${this.siteConfigPath}`, body);
 			await this.loadSite();
 			await this.loadDirty();
 			this.updateValues();
+		},
+		async siteTitleChanged() {
+			await this.loadSite();
+			await this.loadDirty();
 		},
 		todo() {
 			alert("not implemented yet");
