@@ -8,6 +8,7 @@ import (
 
 type GridSession struct {
 	ID         uint      `json:"id" csv:"-" gorm:"primarykey"`
+	Site       string    `json:"site,omitempty" csv:"-" gorm:"index"`
 	Created    time.Time `json:"created,omitzero"`
 	Finished   time.Time `json:"finished,omitzero"`
 	Type       Type      `json:"type"`

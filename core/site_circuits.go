@@ -74,6 +74,9 @@ func (site *Site) publishCircuits() {
 
 	for _, c := range cc {
 		instance := c.Instance()
+		if !site.ownsCircuit(instance) {
+			continue
+		}
 		props := deviceProperties(c)
 
 		// config reference instead of instance: an updated device keeps its name but gets a new instance
@@ -97,6 +100,16 @@ func (site *Site) publishCircuits() {
 	}
 
 	site.publish(keys.Circuits, res)
+}
+
+func (site *Site) ownsCircuit(circuit api.Circuit) bool {
+	if site.circuit == nil || circuit == nil {
+		return false
+	}
+	for circuit.GetParent() != nil {
+		circuit = circuit.GetParent()
+	}
+	return circuit == site.circuit
 }
 
 // dimMeters applies the HEMS dim state to all dimmable aux and ext meters.

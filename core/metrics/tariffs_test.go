@@ -53,3 +53,40 @@ func TestPersistTariffs(t *testing.T) {
 	require.InDelta(t, 250, *res.Co2, 0.001)
 	require.InDelta(t, 21.5, *res.Temperature, 0.001)
 }
+
+func TestPersistTariffsSiteScope(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, setupTariffSchema())
+
+	slot := time.Now().Truncate(15 * time.Minute)
+	home, office := 0.2, 0.4
+	require.NoError(t, PersistSiteTariffs("home_1", slot, &home, nil, nil, nil))
+	require.NoError(t, PersistSiteTariffs("homeA1", slot, &office, nil, nil, nil))
+
+	var values []tariffValue
+	require.NoError(t, db.Instance.Order("site").Find(&values).Error)
+	require.Len(t, values, 2)
+	require.InDelta(t, office, *values[0].Grid, 0.001)
+	require.InDelta(t, home, *values[1].Grid, 0.001)
+}
+
+func TestTariffSchemaMigrationAddsSiteIdentity(t *testing.T) {
+	type legacyTariff struct {
+		Site      *string `gorm:"column:site"`
+		Timestamp int64   `gorm:"column:ts;uniqueIndex"`
+	}
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.Exec("DROP TABLE tariffs").Error)
+	require.NoError(t, db.Instance.Table("tariffs").AutoMigrate(new(legacyTariff)))
+	require.NoError(t, db.Instance.Table("tariffs").Create(map[string]any{"ts": int64(1), "site": nil}).Error)
+	require.NoError(t, setupTariffSchema())
+	var nullSites int64
+	require.NoError(t, db.Instance.Table("tariffs").Where("site IS NULL").Count(&nullSites).Error)
+	require.Zero(t, nullSites)
+
+	slot := time.Now().Truncate(15 * time.Minute)
+	home, office := 0.2, 0.4
+	require.NoError(t, PersistSiteTariffs("home", slot, &home, nil, nil, nil))
+	require.NoError(t, PersistSiteTariffs("office", slot, &office, nil, nil, nil))
+}

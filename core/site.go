@@ -14,7 +14,6 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/cmd/shutdown"
-	"github.com/evcc-io/evcc/core/circuit"
 	"github.com/evcc-io/evcc/core/coordinator"
 	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/loadpoint"
@@ -59,7 +58,10 @@ type Site struct {
 	lpUpdateChan chan *Loadpoint
 
 	sync.RWMutex
-	log *util.Logger
+	log            *util.Logger
+	name           string
+	stateSite      string
+	settingsPrefix string
 
 	// configuration
 	Title         string       `mapstructure:"title"`         // UI title
@@ -101,11 +103,12 @@ type Site struct {
 	// optimizer settings
 	optimizerChargingStrategy string // optimizer grid charging strategy
 
-	loadpoints  []*Loadpoint             // Loadpoints
-	tariffs     *tariff.Tariffs          // Tariffs
-	coordinator *coordinator.Coordinator // Vehicles
-	prioritizer *prioritizer.Prioritizer // Power budgets
-	stats       *Stats                   // Stats
+	loadpoints  []*Loadpoint                 // Loadpoints
+	vehicles    []config.Device[api.Vehicle] // Vehicles
+	tariffs     *tariff.Tariffs              // Tariffs
+	coordinator *coordinator.Coordinator     // Vehicles
+	prioritizer *prioritizer.Prioritizer     // Power budgets
+	stats       *Stats                       // Stats
 
 	collectors map[string]*metrics.Collector // keyed by meter ref
 	tariffSlot time.Time                     // last persisted tariff slot
@@ -156,7 +159,21 @@ type MetersConfig struct {
 
 // NewSiteFromConfig creates a new site
 func NewSiteFromConfig(other map[string]any) (*Site, error) {
+	return newSiteFromConfig("", other)
+}
+
+// NewNamedSiteFromConfig creates a site with namespaced persistent settings.
+func NewNamedSiteFromConfig(name string, other map[string]any) (*Site, error) {
+	return newSiteFromConfig(name, other)
+}
+
+func newSiteFromConfig(name string, other map[string]any) (*Site, error) {
 	site := NewSite()
+	site.name = name
+	if name != "" {
+		site.log = util.NewLogger("site-" + name)
+		site.settingsPrefix = "site." + name + "."
+	}
 
 	// TODO remove
 	if err := util.DecodeOther(other, site); err != nil {
@@ -192,14 +209,14 @@ func activeMeters(refs []string) ([]config.Device[api.Meter], error) {
 // newMeterCollector creates a meter collector and reconciles the persisted meter
 // readings with the device's capabilities, so a device that lost its energy
 // registers falls back to power integration instead of freezing.
-func newMeterCollector(group, ref, title string, meter api.Meter) (*metrics.Collector, error) {
+func (site *Site) newMeterCollector(group, ref, title string, meter api.Meter) (*metrics.Collector, error) {
 	energy, returnEnergy := api.HasCap[api.MeterEnergy](meter), api.HasCap[api.MeterReturnEnergy](meter)
 	if group == metrics.Battery {
 		// batteries map discharge to energy, see updateBatteryMeters
 		energy, returnEnergy = returnEnergy, energy
 	}
 
-	c, err := metrics.NewCollector(group, ref, title)
+	c, err := metrics.NewSiteCollector(site.name, group, ref, title)
 	if err != nil {
 		return nil, err
 	}
@@ -207,25 +224,26 @@ func newMeterCollector(group, ref, title string, meter api.Meter) (*metrics.Coll
 	return c, c.SetCapabilities(energy, returnEnergy)
 }
 
-func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tariff.Tariffs) error {
+func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, vehicles []config.Device[api.Vehicle], vehicleCoordinator *coordinator.Coordinator, tariffs *tariff.Tariffs, rootCircuit api.Circuit) error {
 	site.loadpoints = loadpoints
+	site.vehicles = vehicles
 	site.tariffs = tariffs
 
 	handler := config.Vehicles()
-	site.coordinator = coordinator.New(log, config.Instances(handler.Devices()))
+	site.coordinator = vehicleCoordinator
 	handler.Subscribe(site.updateVehicles)
 
 	site.prioritizer = prioritizer.New(log)
-	site.stats = NewStats()
+	site.stats = NewStats(site.name)
 
-	me, err := metrics.NewCollector(metrics.Home, metrics.Home, metrics.Home)
+	me, err := metrics.NewSiteCollector(site.name, metrics.Home, metrics.Home, metrics.Home)
 	if err != nil {
 		return err
 	}
 	site.collectors[metrics.Home] = me
 
 	// reload history in the UI on each persisted 15min slot instead of polling
-	metrics.OnPersist = func(slot time.Time) { site.publish(keys.HistoryUpdated, slot) }
+	metrics.SubscribePersist(func(slot time.Time) { site.publish(keys.HistoryUpdated, slot) })
 
 	// upload telemetry on shutdown
 	if telemetry.Enabled() {
@@ -240,10 +258,15 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	for _, lp := range site.activeLoadpoints() {
 		lp.coordinator = coordinator.NewAdapter(lp, site.coordinator)
 		lp.planner = planner.New(lp.log, tariff)
+		if lp.chargeEnergy != nil {
+			if err := lp.chargeEnergy.SetSite(site.name); err != nil {
+				return err
+			}
+		}
 
 		if db.Instance != nil {
 			var err error
-			if lp.db, err = session.NewStore(lp.GetTitle(), db.Instance); err != nil {
+			if lp.db, err = session.NewStore(lp.GetTitle(), db.Instance, site.name); err != nil {
 				return err
 			}
 			// Fix any dangling history
@@ -257,8 +280,8 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	}
 
 	// circuit
-	if c := circuit.Root(); c != nil {
-		site.circuit = c
+	if rootCircuit != nil {
+		site.circuit = rootCircuit
 	}
 
 	// grid meter
@@ -273,7 +296,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 		} else {
 			site.gridMeter = dev
 
-			me, err := newMeterCollector(metrics.Grid, site.Meters.GridMeterRef, metrics.Grid, dev.Instance())
+			me, err := site.newMeterCollector(metrics.Grid, site.Meters.GridMeterRef, metrics.Grid, dev.Instance())
 			if err != nil {
 				return err
 			}
@@ -293,7 +316,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 		site.pvMeters = append(site.pvMeters, dev)
 
 		// energy collector (for history persistence and forecast scaling)
-		me, err := newMeterCollector(metrics.PV, ref, deviceTitleOrName(dev), dev.Instance())
+		me, err := site.newMeterCollector(metrics.PV, ref, deviceTitleOrName(dev), dev.Instance())
 		if err != nil {
 			return err
 		}
@@ -301,14 +324,14 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	}
 
 	// solar forecast collector (mirrors PV history shape, used for scale lookup)
-	fc, err := metrics.NewCollector(metrics.Forecast, metrics.Forecast, metrics.Forecast)
+	fc, err := metrics.NewSiteCollector(site.name, metrics.Forecast, metrics.Forecast, metrics.Forecast)
 	if err != nil {
 		return err
 	}
 	site.collectors[metrics.Forecast] = fc
 
 	// temperature forecast collector (populated when TariffUsageTemperature is configured)
-	tc, err := metrics.NewCollector(metrics.Temperature, metrics.Temperature, metrics.Temperature)
+	tc, err := metrics.NewSiteCollector(site.name, metrics.Temperature, metrics.Temperature, metrics.Temperature)
 	if err != nil {
 		return err
 	}
@@ -322,7 +345,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	site.batteryMeters = mm
 	for _, dev := range mm {
 		ref := dev.Config().Name
-		me, err := newMeterCollector(metrics.Battery, ref, deviceTitleOrName(dev), dev.Instance())
+		me, err := site.newMeterCollector(metrics.Battery, ref, deviceTitleOrName(dev), dev.Instance())
 		if err != nil {
 			return err
 		}
@@ -337,7 +360,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	site.extMeters = mm
 	for _, dev := range mm {
 		ref := dev.Config().Name
-		me, err := newMeterCollector(metrics.Meter, ref, deviceTitleOrName(dev), dev.Instance())
+		me, err := site.newMeterCollector(metrics.Meter, ref, deviceTitleOrName(dev), dev.Instance())
 		if err != nil {
 			return err
 		}
@@ -352,7 +375,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	site.auxMeters = mm
 	for _, dev := range mm {
 		ref := dev.Config().Name
-		me, err := newMeterCollector(metrics.Consumer, ref, deviceTitleOrName(dev), dev.Instance())
+		me, err := site.newMeterCollector(metrics.Consumer, ref, deviceTitleOrName(dev), dev.Instance())
 		if err != nil {
 			return err
 		}
@@ -367,7 +390,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	site.consumerMeters = mm
 	for _, dev := range mm {
 		ref := dev.Config().Name
-		me, err := newMeterCollector(metrics.Consumer, ref, deviceTitleOrName(dev), dev.Instance())
+		me, err := site.newMeterCollector(metrics.Consumer, ref, deviceTitleOrName(dev), dev.Instance())
 		if err != nil {
 			return err
 		}
@@ -415,33 +438,37 @@ func NewSite() *Site {
 	return site
 }
 
+func (site *Site) settingKey(key string) string {
+	return site.settingsPrefix + key
+}
+
 // restoreMetersAndTitle restores site meter configuration
 func (site *Site) restoreMetersAndTitle() {
 	if testing.Testing() {
 		return
 	}
-	if v, err := settings.String(keys.Title); err == nil {
+	if v, err := settings.String(site.settingKey(keys.Title)); err == nil {
 		site.Title = v
 	}
-	if v, err := settings.String(keys.GridMeter); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.GridMeter)); err == nil && v != "" {
 		site.Meters.GridMeterRef = v
 	}
-	if v, err := settings.String(keys.PvMeters); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.PvMeters)); err == nil && v != "" {
 		site.Meters.PVMetersRef = append(site.Meters.PVMetersRef, filterConfigurableMeter(strings.Split(v, ","))...)
 	}
-	if v, err := settings.String(keys.BatteryMeters); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.BatteryMeters)); err == nil && v != "" {
 		site.Meters.BatteryMetersRef = append(site.Meters.BatteryMetersRef, filterConfigurableMeter(strings.Split(v, ","))...)
 	}
-	if v, err := settings.String(keys.ExtMeters); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.ExtMeters)); err == nil && v != "" {
 		site.Meters.ExtMetersRef = append(site.Meters.ExtMetersRef, filterConfigurableMeter(strings.Split(v, ","))...)
 	}
-	if v, err := settings.String(keys.AuxMeters); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.AuxMeters)); err == nil && v != "" {
 		site.Meters.AuxMetersRef = append(site.Meters.AuxMetersRef, filterConfigurableMeter(strings.Split(v, ","))...)
 	}
-	if v, err := settings.String(keys.ConsumerMeters); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.ConsumerMeters)); err == nil && v != "" {
 		site.Meters.ConsumerMetersRef = append(site.Meters.ConsumerMetersRef, filterConfigurableMeter(strings.Split(v, ","))...)
 	}
-	if v, err := settings.String(keys.Curtailers); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.Curtailers)); err == nil && v != "" {
 		site.CurtailersRef = append(site.CurtailersRef, filterConfigurableCurtailers(strings.Split(v, ","))...)
 	}
 }
@@ -451,57 +478,57 @@ func (site *Site) restoreSettings() error {
 	if testing.Testing() {
 		return nil
 	}
-	if v, err := settings.Float(keys.BufferSoc); err == nil {
+	if v, err := settings.Float(site.settingKey(keys.BufferSoc)); err == nil {
 		if err := site.SetBufferSoc(v); err != nil && !errors.Is(err, ErrBatteryNotConfigured) {
 			return err
 		}
 	}
-	if v, err := settings.Float(keys.BufferStartSoc); err == nil {
+	if v, err := settings.Float(site.settingKey(keys.BufferStartSoc)); err == nil {
 		if err := site.SetBufferStartSoc(v); err != nil && !errors.Is(err, ErrBatteryNotConfigured) {
 			return err
 		}
 	}
-	if v, err := settings.Float(keys.PrioritySoc); err == nil {
+	if v, err := settings.Float(site.settingKey(keys.PrioritySoc)); err == nil {
 		if err := site.SetPrioritySoc(v); err != nil && !errors.Is(err, ErrBatteryNotConfigured) {
 			return err
 		}
 	}
-	if v, err := settings.Bool(keys.BatteryDischargeControl); err == nil {
+	if v, err := settings.Bool(site.settingKey(keys.BatteryDischargeControl)); err == nil {
 		if err := site.SetBatteryDischargeControl(v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
 			return err
 		}
 	}
-	if v, err := settings.Bool(keys.BatteryGridDischarge); err == nil {
+	if v, err := settings.Bool(site.settingKey(keys.BatteryGridDischarge)); err == nil {
 		if err := site.SetBatteryGridDischarge(v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
 			return err
 		}
 	}
-	if v, err := settings.Float(keys.ResidualPower); err == nil {
+	if v, err := settings.Float(site.settingKey(keys.ResidualPower)); err == nil {
 		if err := site.SetResidualPower(v); err != nil {
 			return err
 		}
 	}
-	if v, err := settings.Float(keys.BatteryGridChargeLimit); err == nil {
+	if v, err := settings.Float(site.settingKey(keys.BatteryGridChargeLimit)); err == nil {
 		if err := site.SetBatteryGridChargeLimit(&v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
 			return err
 		}
 	}
-	if v, err := settings.Float(keys.GridExportLimit); err == nil {
+	if v, err := settings.Float(site.settingKey(keys.GridExportLimit)); err == nil {
 		if err := site.SetGridExportLimit(v); err != nil {
 			return err
 		}
 	}
 	// restored after keys.BatteryGridDischarge above - a stored limit stays dormant
 	// while the opt-in is off
-	if v, err := settings.Float(keys.BatteryGridDischargeLimit); err == nil && site.GetBatteryGridDischarge() {
+	if v, err := settings.Float(site.settingKey(keys.BatteryGridDischargeLimit)); err == nil && site.GetBatteryGridDischarge() {
 		if err := site.SetBatteryGridDischargeLimit(&v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
 			return err
 		}
 	}
-	if v, err := settings.Bool(keys.SolarAdjusted); err == nil {
+	if v, err := settings.Bool(site.settingKey(keys.SolarAdjusted)); err == nil {
 		site.SetSolarAdjusted(v)
 	}
-	if v, err := settings.String(keys.OptimizerChargingStrategy); err == nil && v != "" {
+	if v, err := settings.String(site.settingKey(keys.OptimizerChargingStrategy)); err == nil && v != "" {
 		if err := site.SetOptimizerChargingStrategy(v); err != nil {
 			site.log.WARN.Printf("optimizer charging strategy: %v", err)
 		}
@@ -510,9 +537,9 @@ func (site *Site) restoreSettings() error {
 	site.publish(keys.OptimizerChargingStrategies, optimizerChargingStrategies)
 
 	// drop legacy accumulator-based forecast settings (now stored via metrics collector)
-	settings.Delete("solarAccForecast")
-	settings.Delete("solarAccYield")
-	settings.Delete("solarAccDay")
+	settings.Delete(site.settingKey("solarAccForecast"))
+	settings.Delete(site.settingKey("solarAccYield"))
+	settings.Delete(site.settingKey("solarAccDay"))
 
 	return nil
 }
@@ -1421,8 +1448,7 @@ func (site *Site) prepare() {
 
 	site.publishVehicles()
 	site.publishTariffs(0, 0)
-	vehicle.Publish = site.publishVehicles
-	vehicle.Owner = site.coordinator.Owner
+	vehicle.RegisterCallbacks(site.publishVehicles, site.coordinator.Owner)
 }
 
 // pushEvent queues the event in the value stream. The cache attaches its state
@@ -1435,13 +1461,21 @@ func (site *Site) pushEvent(ev messenger.Event) {
 	}
 
 	site.valueChan <- util.Param{Val: util.Snapshot(func(state []util.Param) {
-		ev.State = state
+		ev.Site = site.name
+		ev.State = lo.Filter(state, func(param util.Param, _ int) bool { return param.Site == site.stateSite })
 		pushChan <- ev
 	})}
 }
 
 // Prepare attaches communication channels to site and loadpoints
 func (site *Site) Prepare(valueChan chan<- util.Param, pushChan chan<- messenger.Event) {
+	site.PrepareScoped(valueChan, pushChan, "")
+}
+
+// PrepareScoped attaches communication channels and identifies the state
+// namespace used by this site in the shared cache.
+func (site *Site) PrepareScoped(valueChan chan<- util.Param, pushChan chan<- messenger.Event, stateSite string) {
+	site.stateSite = stateSite
 	site.pushChan = pushChan
 	// https://github.com/evcc-io/evcc/issues/11191 prevent deadlock
 	// https://github.com/evcc-io/evcc/pull/11675 maintain message order

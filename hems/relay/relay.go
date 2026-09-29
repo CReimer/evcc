@@ -120,7 +120,7 @@ func (c *Relay) run() error {
 		return err
 	}
 
-	if err := smartgrid.UpdateSession(&c.smartgridID, smartgrid.Dim, c.site.GetGridPower(), limit, active); err != nil {
+	if err := smartgrid.UpdateSession(&c.smartgridID, c.site, smartgrid.Dim, c.site.GetGridPower(), limit, active); err != nil {
 		return fmt.Errorf("smartgrid session: %v", err)
 	}
 

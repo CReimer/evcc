@@ -21,6 +21,7 @@ import (
 	"github.com/evcc-io/evcc/cmd/shutdown"
 	"github.com/evcc-io/evcc/core"
 	"github.com/evcc-io/evcc/core/circuit"
+	"github.com/evcc-io/evcc/core/coordinator"
 	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/metrics"
@@ -159,6 +160,10 @@ func isWritable(filePath string) bool {
 }
 
 func configureCircuits(conf *[]config.Named) error {
+	return configureCircuitsWithRoots(conf, false)
+}
+
+func configureCircuitsWithRoots(conf *[]config.Named, multipleRoots bool) error {
 	// yaml config from file
 	if len(*conf) != 0 {
 		yamlSource.circuits = globalconfig.YamlSourceFile
@@ -188,10 +193,10 @@ func configureCircuits(conf *[]config.Named) error {
 		return errors.New("circuits are configured via UI; having an additional yaml config is not allowed")
 	}
 
-	if err := validateStaticCircuits(slices.Clone(*conf)); err != nil {
+	if err := validateStaticCircuits(slices.Clone(*conf), multipleRoots); err != nil {
 		return err
 	}
-	if err := validateConfigurableCircuits(configurable); err != nil {
+	if err := validateConfigurableCircuits(configurable, multipleRoots); err != nil {
 		return err
 	}
 
@@ -203,7 +208,7 @@ func configureCircuits(conf *[]config.Named) error {
 }
 
 // validateCircuitConfigs validates circuit configurations with support for both static and configurable types
-func validateCircuitConfigs[T any](children []T, getConfigAndLogger func(T) (config.Named, *util.Logger), getDevice func(T, api.Circuit) config.Device[api.Circuit]) error {
+func validateCircuitConfigs[T any](children []T, multipleRoots bool, getConfigAndLogger func(T) (config.Named, *util.Logger), getDevice func(T, api.Circuit) config.Device[api.Circuit]) error {
 	// TODO check for circular references
 	var errs []error
 
@@ -264,7 +269,7 @@ NEXT:
 		c := dev.Instance()
 
 		if c.GetParent() == nil {
-			if rootFound {
+			if rootFound && !multipleRoots {
 				return errors.New("cannot have multiple root circuits")
 			}
 			rootFound = true
@@ -278,9 +283,10 @@ NEXT:
 	return nil
 }
 
-func validateStaticCircuits(children []config.Named) error {
+func validateStaticCircuits(children []config.Named, multipleRoots bool) error {
 	return validateCircuitConfigs(
 		children,
+		multipleRoots,
 		func(cc config.Named) (config.Named, *util.Logger) { return cc, util.NewLogger(cc.Name) },
 		func(cc config.Named, instance api.Circuit) config.Device[api.Circuit] {
 			return config.NewStaticDevice(cc, instance)
@@ -288,9 +294,10 @@ func validateStaticCircuits(children []config.Named) error {
 	)
 }
 
-func validateConfigurableCircuits(children []config.Config) error {
+func validateConfigurableCircuits(children []config.Config, multipleRoots bool) error {
 	return validateCircuitConfigs(
 		children,
+		multipleRoots,
 		func(cc config.Config) (config.Named, *util.Logger) { return cc.Named(), loggerForConfig(&cc) },
 		func(cc config.Config, instance api.Circuit) config.Device[api.Circuit] {
 			return config.NewConfigurableDevice(&cc, instance)
@@ -1028,6 +1035,10 @@ func configureEEBus(conf *eebus.Config) error {
 }
 
 func configureMessengers(confMessaging *globalconfig.Messaging, confEvents *globalconfig.MessagingEvents, vehicles messenger.Vehicles) (chan messenger.Event, error) {
+	return configureMessengersForSites(confMessaging, confEvents, map[string]messenger.Vehicles{"": vehicles})
+}
+
+func configureMessengersForSites(confMessaging *globalconfig.Messaging, confEvents *globalconfig.MessagingEvents, vehicles map[string]messenger.Vehicles) (chan messenger.Event, error) {
 	// yaml config from file
 	if len(confMessaging.Events) != 0 || len(confMessaging.Services) != 0 {
 		yamlSource.messaging = globalconfig.YamlSourceFile
@@ -1098,7 +1109,7 @@ func configureMessengers(confMessaging *globalconfig.Messaging, confEvents *glob
 		events = confMessaging.Events
 	}
 
-	messageHub, err := messenger.NewHub(events, vehicles)
+	messageHub, err := messenger.NewMultiHub(events, vehicles)
 
 	if err != nil {
 		return messageChan, fmt.Errorf("failed configuring push services: %w", err)
@@ -1312,6 +1323,25 @@ func configureTariffs(conf *globalconfig.Tariffs, names ...string) (*tariff.Tari
 	return &tariffs, nil
 }
 
+func tariffsFromRefs(defaults *tariff.Tariffs, refs globalconfig.TariffRefs) (*tariff.Tariffs, error) {
+	if !refs.IsConfigured() {
+		return defaults, nil
+	}
+
+	res := &tariff.Tariffs{Currency: defaults.Currency}
+	var eg errgroup.Group
+	eg.Go(func() error { return configureTariff(config.Typed{}, refs.Grid, &res.Grid) })
+	eg.Go(func() error { return configureTariff(config.Typed{}, refs.FeedIn, &res.FeedIn) })
+	eg.Go(func() error { return configureTariff(config.Typed{}, refs.Co2, &res.Co2) })
+	eg.Go(func() error { return configureTariff(config.Typed{}, refs.Planner, &res.Planner) })
+	eg.Go(func() error { return configureSolarTariffs(nil, refs.Solar, &res.Solar) })
+	eg.Go(func() error { return configureTariff(config.Typed{}, refs.Temperature, &res.Temperature) })
+	if err := eg.Wait(); err != nil {
+		return res, &ClassError{ClassTariff, err}
+	}
+	return res, nil
+}
+
 func configureDevices(conf globalconfig.All) error {
 	// collect references for filtering used devices
 	if err := collectRefs(conf); err != nil {
@@ -1333,7 +1363,7 @@ func configureDevices(conf globalconfig.All) error {
 		errs = append(errs, &ClassError{ClassVehicle, err})
 	}
 
-	if err := configureCircuits(&conf.Circuits); err != nil {
+	if err := configureCircuitsWithRoots(&conf.Circuits, len(conf.Sites) > 0); err != nil {
 		errs = append(errs, &ClassError{ClassCircuit, err})
 	}
 
@@ -1372,6 +1402,20 @@ func configureModbusProxy(conf *[]globalconfig.ModbusProxy) error {
 }
 
 func configureSiteAndLoadpoints(conf *globalconfig.All) (*core.Site, error) {
+	sites, err := configureSitesAndLoadpoints(conf)
+	if len(sites) == 0 {
+		return nil, err
+	}
+	return sites[0].site, err
+}
+
+type configuredSite struct {
+	name string
+	site *core.Site
+	hems globalconfig.Hems
+}
+
+func configureSitesAndLoadpoints(conf *globalconfig.All) ([]configuredSite, error) {
 	// migrate settings
 	if settings.Exists(keys.Interval) {
 		d, err := settings.Int(keys.Interval)
@@ -1383,6 +1427,18 @@ func configureSiteAndLoadpoints(conf *globalconfig.All) (*core.Site, error) {
 
 	var errs []error
 
+	configurableLoadpoints, err := config.ConfigurationsByClass(templates.Loadpoint)
+	if err != nil {
+		return nil, err
+	}
+	databaseLoadpoints := make([]config.Named, 0, len(configurableLoadpoints))
+	for index := range configurableLoadpoints {
+		databaseLoadpoints = append(databaseLoadpoints, configurableLoadpoints[index].Named())
+	}
+	siteConfigs, err := normalizedSites(*conf, databaseLoadpoints...)
+	if err != nil {
+		return nil, err
+	}
 	if err := configureDevices(*conf); err != nil {
 		errs = append(errs, err)
 	}
@@ -1391,34 +1447,129 @@ func configureSiteAndLoadpoints(conf *globalconfig.All) (*core.Site, error) {
 		errs = append(errs, &ClassError{ClassLoadpoint, err})
 	}
 
-	tariffs, err := configureTariffs(&conf.Tariffs, references.tariff...)
+	defaultTariffs, err := configureTariffs(&conf.Tariffs, references.tariff...)
 	if err != nil {
 		errs = append(errs, &ClassError{ClassTariff, err})
 	}
 
-	// nil entries mark disabled loadpoints- indexes stay aligned with config order
-	var loadpoints []*core.Loadpoint
+	// nil entries mark disabled loadpoints. Indexes stay aligned with config order.
+	loadpoints := make(map[string]*core.Loadpoint)
 	for _, dev := range config.Loadpoints().Devices() {
 		inst, _ := dev.Instance().(*core.Loadpoint)
-		loadpoints = append(loadpoints, inst)
+		loadpoints[dev.Config().Name] = inst
 	}
 
-	site, err := configureSite(conf.Site, loadpoints, tariffs)
-	if err != nil {
-		errs = append(errs, err)
+	vehicleDevices := config.Vehicles().Devices()
+	vehicleCoordinator := coordinator.New(log, config.Instances(vehicleDevices))
+
+	var sites []configuredSite
+	for _, siteConf := range siteConfigs {
+		tariffs, tariffErr := tariffsFromRefs(defaultTariffs, siteConf.tariffs)
+		if tariffErr != nil {
+			errs = append(errs, fmt.Errorf("site %s: %w", siteConf.name, tariffErr))
+		}
+		var assigned []*core.Loadpoint
+		if len(conf.Sites) == 0 {
+			for _, dev := range config.Loadpoints().Devices() {
+				assigned = append(assigned, loadpoints[dev.Config().Name])
+			}
+		} else {
+			for _, name := range siteConf.loadpoints {
+				assigned = append(assigned, loadpoints[name])
+			}
+		}
+
+		rootCircuit, circuitErr := siteCircuit(siteConf.circuit, len(conf.Sites) == 0)
+		if circuitErr != nil {
+			errs = append(errs, fmt.Errorf("site %s: %w", siteConf.name, circuitErr))
+		}
+
+		name := ""
+		if len(conf.Sites) > 0 {
+			name = siteConf.name
+		}
+		site, siteErr := configureSite(name, siteConf.config, assigned, vehicleDevices, vehicleCoordinator, tariffs, rootCircuit)
+		if siteErr != nil {
+			errs = append(errs, fmt.Errorf("site %s: %w", siteConf.name, siteErr))
+		}
+		if len(sites) > 0 && site != nil && site.Voltage != sites[0].site.Voltage {
+			errs = append(errs, fmt.Errorf("site %s: voltage %.0fV differs from primary site %.0fV", siteConf.name, site.Voltage, sites[0].site.Voltage))
+		}
+		sites = append(sites, configuredSite{name: siteConf.name, site: site, hems: siteConf.hems})
 	}
 
 	if len(errs) > 0 {
-		return site, joinErrors(errs...)
+		return sites, joinErrors(errs...)
 	}
 
 	if len(config.Circuits().Devices()) > 0 {
-		if err := validateCircuits(loadpoints); err != nil {
-			return site, &ClassError{ClassCircuit, err}
+		if len(conf.Sites) > 0 {
+			if err := validateSiteCircuits(sites); err != nil {
+				return sites, &ClassError{ClassCircuit, err}
+			}
+		} else {
+			var assigned []*core.Loadpoint
+			for _, lp := range loadpoints {
+				assigned = append(assigned, lp)
+			}
+			if err := validateCircuits(assigned); err != nil {
+				return sites, &ClassError{ClassCircuit, err}
+			}
 		}
 	}
 
-	return site, nil
+	return sites, nil
+}
+
+func validateSiteCircuits(sites []configuredSite) error {
+	roots := make(map[api.Circuit]string)
+	for _, configured := range sites {
+		root := configured.site.GetCircuit()
+		if root == nil {
+			continue
+		}
+		if owner, exists := roots[root]; exists {
+			return fmt.Errorf("sites %q and %q use the same root circuit", owner, configured.name)
+		}
+		roots[root] = configured.name
+		for _, lp := range configured.site.Loadpoints() {
+			circuit := lp.GetCircuit()
+			if circuit == nil {
+				continue
+			}
+			for circuit.GetParent() != nil {
+				circuit = circuit.GetParent()
+			}
+			if circuit != root {
+				return fmt.Errorf("loadpoint %q is outside site %q circuit tree", lp.GetTitle(), configured.name)
+			}
+		}
+	}
+	for _, dev := range config.Circuits().Devices() {
+		if dev.Instance().GetParent() == nil {
+			if _, exists := roots[dev.Instance()]; !exists {
+				return fmt.Errorf("root circuit %q is not assigned to a site", dev.Config().Name)
+			}
+		}
+	}
+	return nil
+}
+
+func siteCircuit(ref string, legacy bool) (api.Circuit, error) {
+	if legacy {
+		return circuit.Root(), nil
+	}
+	if ref == "" {
+		return nil, nil
+	}
+	dev, err := config.Circuits().ByName(ref)
+	if err != nil {
+		return nil, fmt.Errorf("circuit %q not found: %w", ref, err)
+	}
+	if dev.Instance().GetParent() != nil {
+		return nil, fmt.Errorf("circuit %q is not a root circuit", ref)
+	}
+	return dev.Instance(), nil
 }
 
 func validateCircuits(loadpoints []*core.Loadpoint) error {
@@ -1455,13 +1606,21 @@ CONTINUE:
 	return nil
 }
 
-func configureSite(conf map[string]any, loadpoints []*core.Loadpoint, tariffs *tariff.Tariffs) (*core.Site, error) {
-	site, err := core.NewSiteFromConfig(conf)
+func configureSite(name string, conf map[string]any, loadpoints []*core.Loadpoint, vehicles []config.Device[api.Vehicle], vehicleCoordinator *coordinator.Coordinator, tariffs *tariff.Tariffs, rootCircuit api.Circuit) (*core.Site, error) {
+	var (
+		site *core.Site
+		err  error
+	)
+	if name != "" {
+		site, err = core.NewNamedSiteFromConfig(name, conf)
+	} else {
+		site, err = core.NewSiteFromConfig(conf)
+	}
 	if err != nil {
 		return site, err
 	}
 
-	if err := site.Boot(log, loadpoints, tariffs); err != nil {
+	if err := site.Boot(log, loadpoints, vehicles, vehicleCoordinator, tariffs, rootCircuit); err != nil {
 		return site, fmt.Errorf("failed booting site: %w", err)
 	}
 
@@ -1487,9 +1646,14 @@ func newLoadpoint(idx int, name string, other map[string]any, settingsFn func(*u
 func configureLoadpoints(conf globalconfig.All) error {
 	for id, cc := range conf.Loadpoints {
 		idx := id + 1
-		cc.Name = "lp-" + strconv.Itoa(idx)
+		cc.Name = loadpointName(id, cc)
+		other := make(map[string]any, len(cc.Other))
+		for key, value := range cc.Other {
+			other[key] = value
+		}
+		delete(other, "site")
 
-		instance, err := newLoadpoint(idx, cc.Name, cc.Other, func(*util.Logger) coresettings.Settings {
+		instance, err := newLoadpoint(idx, cc.Name, other, func(*util.Logger) coresettings.Settings {
 			return coresettings.NewDatabaseSettingsAdapter(fmt.Sprintf("lp%d.", idx))
 		})
 		if err != nil {
@@ -1518,6 +1682,7 @@ func configureLoadpoints(conf globalconfig.All) error {
 
 		var instance loadpoint.API
 		if !conf.Disable {
+			delete(static, "site")
 			lp, e := newLoadpoint(idx, cc.Name, static, func(log *util.Logger) coresettings.Settings {
 				return coresettings.NewConfigSettingsAdapter(log, &conf)
 			})

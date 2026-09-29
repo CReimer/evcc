@@ -92,6 +92,26 @@ func TestSeriesExport_GermanLocale(t *testing.T) {
 	require.False(t, strings.Contains(s, "2,500"), "no ',' decimal/thousands")
 }
 
+func TestQueryEnergySite(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	home := entity{Site: "home_1", Group: Grid, Name: "grid", Title: "grid"}
+	office := entity{Site: "homeA1", Group: Grid, Name: "grid", Title: "grid"}
+	require.NoError(t, db.Instance.Create(&home).Error)
+	require.NoError(t, db.Instance.Create(&office).Error)
+	ts := time.Now().Truncate(15 * time.Minute).Unix()
+	require.NoError(t, db.Instance.Create(&[]meter{
+		{Meter: home.Id, Timestamp: ts, Energy: 1},
+		{Meter: office.Id, Timestamp: ts, Energy: 2},
+	}).Error)
+
+	site := "home_1"
+	result, err := QueryEnergy(time.Time{}, time.Time{}, "15m", false, EnergyFilter{Site: &site})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Len(t, result[0].Data, 1)
+	require.Equal(t, 1.0, result[0].Data[0].Energy)
+}
+
 func TestSeriesExport_MissingSlotIsEmpty(t *testing.T) {
 	t0 := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(15 * time.Minute)

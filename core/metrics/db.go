@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/evcc-io/evcc/db"
@@ -23,8 +24,9 @@ type meter struct {
 
 type entity struct {
 	Id                int      `gorm:"column:id;primarykey"`
-	Group             string   `gorm:"column:group;uniqueIndex:entities_group_name"`
-	Name              string   `gorm:"column:name;uniqueIndex:entities_group_name"`
+	Site              string   `gorm:"column:site;default:'';uniqueIndex:entities_site_group_name"`
+	Group             string   `gorm:"column:group;uniqueIndex:entities_site_group_name"`
+	Name              string   `gorm:"column:name;uniqueIndex:entities_site_group_name"`
 	Title             string   `gorm:"column:title"`
 	IsTemp            bool     `gorm:"column:is_temp"`             // soc_temp holds temperature, not soc
 	EnergyMeter       *float64 `gorm:"column:energy_meter"`        // kWh, at last persisted slot
@@ -41,7 +43,24 @@ func init() {
 func SetupSchema() error {
 	m := db.Instance.Migrator()
 
-	// entites: create entity first to make sure foreign keys for existing data work
+	// entities: add the scope before replacing the legacy unique index
+	if m.HasTable(new(entity)) && !m.HasColumn(new(entity), "site") {
+		if err := m.AddColumn(new(entity), "Site"); err != nil {
+			return err
+		}
+	}
+	if m.HasTable(new(entity)) {
+		if err := db.Instance.Exec("UPDATE entities SET site = '' WHERE site IS NULL").Error; err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"entities_group_name", "idx_entities_group_name"} {
+		if m.HasIndex(new(entity), name) {
+			if err := m.DropIndex(new(entity), name); err != nil {
+				return err
+			}
+		}
+	}
 	if err := db.Instance.AutoMigrate(new(entity)); err != nil {
 		return err
 	}
@@ -133,8 +152,26 @@ func SetupSchema() error {
 	return db.Instance.AutoMigrate(new(meter))
 }
 
-// OnPersist, if set, is called with the slot start after a slot is written.
-var OnPersist func(slot time.Time)
+var persistSubscribers struct {
+	sync.RWMutex
+	callbacks []func(time.Time)
+}
+
+// SubscribePersist adds a callback invoked after a completed slot is written.
+func SubscribePersist(callback func(time.Time)) {
+	persistSubscribers.Lock()
+	defer persistSubscribers.Unlock()
+	persistSubscribers.callbacks = append(persistSubscribers.callbacks, callback)
+}
+
+func notifyPersist(slot time.Time) {
+	persistSubscribers.RLock()
+	callbacks := slices.Clone(persistSubscribers.callbacks)
+	persistSubscribers.RUnlock()
+	for _, callback := range callbacks {
+		callback(slot)
+	}
+}
 
 // persist stores a completed 15min slot
 func persist(entity entity, ts time.Time, energy, returnEnergy float64, socTemp *float64, recovered bool) error {
@@ -149,8 +186,6 @@ func persist(entity entity, ts time.Time, energy, returnEnergy float64, socTemp 
 	}).Error; err != nil {
 		return err
 	}
-	if OnPersist != nil {
-		OnPersist(slot)
-	}
+	notifyPersist(slot)
 	return nil
 }

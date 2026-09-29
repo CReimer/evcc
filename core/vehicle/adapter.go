@@ -3,6 +3,7 @@ package vehicle
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
@@ -20,6 +21,20 @@ var Publish func()
 // Owner returns the loadpoint a vehicle is currently attached to, nil if unattached
 var Owner func(api.Vehicle) loadpoint.API
 
+var callbacks struct {
+	sync.RWMutex
+	publishers []func()
+	owners     []func(api.Vehicle) loadpoint.API
+}
+
+// RegisterCallbacks adds site-scoped vehicle callbacks.
+func RegisterCallbacks(publish func(), owner func(api.Vehicle) loadpoint.API) {
+	callbacks.Lock()
+	defer callbacks.Unlock()
+	callbacks.publishers = append(callbacks.publishers, publish)
+	callbacks.owners = append(callbacks.owners, owner)
+}
+
 type adapter struct {
 	log         *util.Logger
 	name        string
@@ -34,11 +49,25 @@ func (v *adapter) publish() {
 	if Publish != nil {
 		Publish()
 	}
+	callbacks.RLock()
+	publishers := append([]func(){}, callbacks.publishers...)
+	callbacks.RUnlock()
+	for _, publish := range publishers {
+		publish()
+	}
 }
 
 // owner returns the loadpoint the vehicle is attached to, nil if unattached
 func (v *adapter) owner() loadpoint.API {
 	if Owner == nil {
+		callbacks.RLock()
+		owners := append([]func(api.Vehicle) loadpoint.API{}, callbacks.owners...)
+		callbacks.RUnlock()
+		for _, owner := range owners {
+			if lp := owner(v.Instance()); lp != nil {
+				return lp
+			}
+		}
 		return nil
 	}
 	return Owner(v.Instance())

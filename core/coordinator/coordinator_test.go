@@ -6,8 +6,42 @@ import (
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/util"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
+
+func TestCoordinatorSharesVehicleOwnership(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	vehicle := api.NewMockVehicle(ctrl)
+	home := loadpoint.NewMockAPI(ctrl)
+	office := loadpoint.NewMockAPI(ctrl)
+
+	coordinator := New(util.NewLogger("test"), []api.Vehicle{vehicle})
+	homeVehicles := NewAdapter(home, coordinator)
+	officeVehicles := NewAdapter(office, coordinator)
+
+	require.Equal(t, []api.Vehicle{vehicle}, homeVehicles.GetVehicles(true))
+	require.Equal(t, []api.Vehicle{vehicle}, officeVehicles.GetVehicles(true))
+
+	homeVehicles.Acquire(vehicle)
+	assert.Same(t, home, officeVehicles.Owner(vehicle))
+	assert.Empty(t, officeVehicles.GetVehicles(true))
+
+	home.EXPECT().SetVehicle(nil)
+	officeVehicles.Acquire(vehicle)
+	assert.Same(t, office, homeVehicles.Owner(vehicle))
+	assert.Empty(t, homeVehicles.GetVehicles(true))
+}
+
+func TestCoordinatorAddIsIdempotent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	vehicle := api.NewMockVehicle(ctrl)
+	coordinator := New(util.NewLogger("test"), []api.Vehicle{vehicle})
+
+	coordinator.Add(vehicle)
+	assert.Equal(t, []api.Vehicle{vehicle}, coordinator.GetVehicles(false))
+}
 
 func TestVehicleDetectByStatus(t *testing.T) {
 	ctrl := gomock.NewController(t)

@@ -16,6 +16,7 @@ import (
 
 // Event is a notification event
 type Event struct {
+	Site       string
 	Loadpoint  *int // optional loadpoint id
 	Event      string
 	Attributes map[string]any // optional event-specific template attributes
@@ -31,11 +32,16 @@ type Vehicles interface {
 type Hub struct {
 	definitions globalconfig.MessagingEvents
 	sender      []api.Messenger
-	vehicles    Vehicles
+	vehicles    map[string]Vehicles
 }
 
 // NewHub creates push hub with definitions and receiver
 func NewHub(cc globalconfig.MessagingEvents, vv Vehicles) (*Hub, error) {
+	return NewMultiHub(cc, map[string]Vehicles{"": vv})
+}
+
+// NewMultiHub creates a messaging hub with site-scoped vehicle resolvers.
+func NewMultiHub(cc globalconfig.MessagingEvents, vehicles map[string]Vehicles) (*Hub, error) {
 	// keep only enabled events
 	filtered := make(globalconfig.MessagingEvents, len(cc))
 
@@ -57,7 +63,7 @@ func NewHub(cc globalconfig.MessagingEvents, vv Vehicles) (*Hub, error) {
 
 	h := &Hub{
 		definitions: filtered,
-		vehicles:    vv,
+		vehicles:    vehicles,
 	}
 
 	return h, nil
@@ -93,15 +99,21 @@ func (h *Hub) apply(ev Event, tmpl string) (string, error) {
 
 	// add missing attributes
 	if name, ok := attr["vehicleName"].(string); ok {
-		if v, err := h.vehicles.ByName(name); err == nil {
-			attr["vehicleLimitSoc"] = v.GetLimitSoc()
-			attr["vehicleMinSoc"] = v.GetMinSoc()
-			attr["vehiclePlanTime"], attr["vehiclePlanSoc"] = v.GetPlanSoc()
+		vehicles := h.vehicles[ev.Site]
+		if vehicles == nil {
+			vehicles = h.vehicles[""]
+		}
+		if vehicles != nil {
+			if v, err := vehicles.ByName(name); err == nil {
+				attr["vehicleLimitSoc"] = v.GetLimitSoc()
+				attr["vehicleMinSoc"] = v.GetMinSoc()
+				attr["vehiclePlanTime"], attr["vehiclePlanSoc"] = v.GetPlanSoc()
 
-			instance := v.Instance()
-			attr["vehicleTitle"] = instance.GetTitle()
-			attr["vehicleIcon"] = instance.Icon()
-			attr["vehicleCapacity"] = instance.Capacity()
+				instance := v.Instance()
+				attr["vehicleTitle"] = instance.GetTitle()
+				attr["vehicleIcon"] = instance.Icon()
+				attr["vehicleCapacity"] = instance.Capacity()
+			}
 		}
 	}
 

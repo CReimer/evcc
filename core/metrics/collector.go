@@ -6,6 +6,7 @@ import (
 	"github.com/evcc-io/evcc/db"
 	"github.com/evcc-io/evcc/tariff"
 	"github.com/jinzhu/now"
+	"gorm.io/gorm"
 )
 
 const (
@@ -31,7 +32,16 @@ type Collector struct {
 }
 
 func NewCollector(group, name, title string, opt ...func(*Accumulator)) (*Collector, error) {
-	entity, err := createEntity(group, name, title)
+	return newCollector("", group, name, title, opt...)
+}
+
+// NewSiteCollector creates a collector with site-scoped persistence.
+func NewSiteCollector(site, group, name, title string, opt ...func(*Accumulator)) (*Collector, error) {
+	return newCollector(site, group, name, title, opt...)
+}
+
+func newCollector(site, group, name, title string, opt ...func(*Accumulator)) (*Collector, error) {
+	entity, err := createSiteEntity(site, group, name, title)
 	if err != nil {
 		return nil, err
 	}
@@ -57,21 +67,69 @@ func NewCollector(group, name, title string, opt ...func(*Accumulator)) (*Collec
 
 // createEntity ensures the entity row exists and refreshes its title.
 func createEntity(group, name, title string) (entity, error) {
+	return createSiteEntity("", group, name, title)
+}
+
+func createSiteEntity(site, group, name, title string) (entity, error) {
+	if site != "" {
+		legacyName := site + "/" + name
+		var matches []entity
+		if err := db.Instance.Where(`"group" = ? AND ((site = ? AND name = ?) OR (COALESCE(site, '') = '' AND name IN ?))`, group, site, name, []string{legacyName, name}).Find(&matches).Error; err != nil {
+			return entity{}, err
+		}
+		if len(matches) > 0 {
+			target := matches[0]
+			for _, match := range matches {
+				if match.Site == site || match.Name == legacyName {
+					target = match
+					if match.Site == site {
+						break
+					}
+				}
+			}
+			if target.Site != site || target.Name != name {
+				if err := db.Instance.Model(&target).Updates(map[string]any{"site": site, "name": name}).Error; err != nil {
+					return target, err
+				}
+				target.Site, target.Name = site, name
+			}
+			for _, match := range matches {
+				if match.Id != target.Id {
+					if err := mergeEntity(match, target); err != nil {
+						return target, err
+					}
+				}
+			}
+		}
+	}
+
 	// keep history when a meter is regrouped "meter" -> "consumer" (aux, ext convert)
 	if group == Consumer {
 		var prev entity
-		if db.Instance.Where(`"group" = ? AND name = ?`, Meter, name).Limit(1).Find(&prev).RowsAffected > 0 {
+		if db.Instance.Where(`site = ? AND "group" = ? AND name = ?`, site, Meter, name).Limit(1).Find(&prev).RowsAffected > 0 {
 			db.Instance.Model(&prev).UpdateColumn("group", Consumer)
 		}
 	}
 
-	e := entity{Group: group, Name: name}
+	e := entity{Site: site, Group: group, Name: name}
 
 	if err := db.Instance.Where(&e).Attrs(entity{Title: title}).FirstOrCreate(&e).Error; err != nil {
 		return e, err
 	}
 
 	return e, e.updateTitle(title)
+}
+
+func mergeEntity(from, to entity) error {
+	return db.Instance.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("UPDATE OR IGNORE meters SET meter = ? WHERE meter = ?", to.Id, from.Id).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("meter = ?", from.Id).Delete(new(meter)).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&from).Error
+	})
 }
 
 // updateTitle refreshes the entity's stored title if it changed
@@ -97,6 +155,32 @@ func (e *entity) updateIsTemp(isTemp bool) error {
 // UpdateTitle refreshes the collector entity's stored title if it changed.
 func (c *Collector) UpdateTitle(title string) error {
 	return c.entity.updateTitle(title)
+}
+
+// SetSite moves a collector and its history into a site scope.
+func (c *Collector) SetSite(site string) error {
+	if c.entity.Site == site {
+		return nil
+	}
+
+	var target entity
+	query := db.Instance.Where(`site = ? AND "group" = ? AND name = ?`, site, c.entity.Group, c.entity.Name).Limit(1).Find(&target)
+	if query.Error != nil {
+		return query.Error
+	}
+	if query.RowsAffected > 0 {
+		if err := mergeEntity(c.entity, target); err != nil {
+			return err
+		}
+		c.entity = target
+		return nil
+	}
+
+	if err := db.Instance.Model(&c.entity).UpdateColumn("site", site).Error; err != nil {
+		return err
+	}
+	c.entity.Site = site
+	return nil
 }
 
 func (c *Collector) process(fun func()) error {

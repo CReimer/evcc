@@ -19,11 +19,13 @@ type publisher interface {
 type Stats struct {
 	updated time.Time // Time of last charged value update
 	log     *util.Logger
+	site    string
 }
 
-func NewStats() *Stats {
+func NewStats(site string) *Stats {
 	return &Stats{
-		log: util.NewLogger("stats"),
+		log:  util.NewLogger("stats"),
+		site: site,
 	}
 }
 
@@ -49,14 +51,21 @@ func (s *Stats) calculate(fromDate time.Time) map[string]float64 {
 	result := make(map[string]float64)
 
 	executeQuery := func(selectClause string, whereClause string, fromDate time.Time, dest any) {
+		siteClause := ""
+		args := []any{fromDate}
+		if s.site != "" {
+			siteClause = "AND site = ?"
+			args = append(args, s.site)
+		}
 		query := fmt.Sprintf(`
 		SELECT COALESCE(%s, 0)
 		FROM sessions
 		WHERE finished >= ? 
 		AND charged_kwh > 0 
-		%s`, selectClause, whereClause)
+		%s
+		%s`, selectClause, siteClause, whereClause)
 
-		if err := db.Instance.Raw(query, fromDate).Scan(dest).Error; err != nil {
+		if err := db.Instance.Raw(query, args...).Scan(dest).Error; err != nil {
 			s.log.ERROR.Printf("error executing query: %v", err)
 		}
 	}

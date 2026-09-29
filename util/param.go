@@ -11,6 +11,7 @@ import (
 
 // Param is the broadcast channel data type
 type Param struct {
+	Site      string
 	Loadpoint *int
 	Key       string
 	Val       any
@@ -18,11 +19,18 @@ type Param struct {
 
 // UniqueID returns unique identifier for parameter Loadpoint/Key combination
 func (p Param) UniqueID() string {
+	prefix := ""
+	if p.Site != "" {
+		prefix = "sites." + p.Site + "."
+	}
 	if p.Loadpoint != nil {
-		return strconv.Itoa(*p.Loadpoint) + "." + p.Key
+		if p.Site == "" {
+			return strconv.Itoa(*p.Loadpoint) + "." + p.Key
+		}
+		return prefix + "loadpoints." + strconv.Itoa(*p.Loadpoint) + "." + p.Key
 	}
 
-	return p.Key
+	return prefix + p.Key
 }
 
 // ParamCache is a data store
@@ -63,8 +71,33 @@ func (c *ParamCache) State(enc encode.Encoder) map[string]any {
 
 	res := make(map[string]any)
 	lps := make(map[int]map[string]any)
+	sites := make(map[string]map[string]any)
+	siteLoadpoints := make(map[string]map[int]map[string]any)
 
 	for _, param := range c.val {
+		if param.Site != "" {
+			site, ok := sites[param.Site]
+			if !ok {
+				site = make(map[string]any)
+				sites[param.Site] = site
+			}
+			if param.Loadpoint == nil {
+				site[param.Key] = enc.Encode(param.Val)
+				continue
+			}
+			byID, ok := siteLoadpoints[param.Site]
+			if !ok {
+				byID = make(map[int]map[string]any)
+				siteLoadpoints[param.Site] = byID
+			}
+			lp, ok := byID[*param.Loadpoint]
+			if !ok {
+				lp = make(map[string]any)
+				byID[*param.Loadpoint] = lp
+			}
+			lp[param.Key] = enc.Encode(param.Val)
+			continue
+		}
 		if param.Loadpoint == nil {
 			res[param.Key] = enc.Encode(param.Val)
 		} else {
@@ -83,6 +116,16 @@ func (c *ParamCache) State(enc encode.Encoder) map[string]any {
 		loadpoints[id] = lp
 	}
 	res["loadpoints"] = loadpoints
+	for name, byID := range siteLoadpoints {
+		loadpoints := make([]map[string]any, len(byID))
+		for id, lp := range byID {
+			loadpoints[id] = lp
+		}
+		sites[name]["loadpoints"] = loadpoints
+	}
+	if len(sites) > 0 {
+		res["sites"] = sites
+	}
 
 	return res
 }

@@ -58,6 +58,7 @@ var aggregateDurations = map[string]func(time.Time) time.Time{
 
 // EnergyFilter narrows QueryEnergy to matching entities. Empty fields are ignored.
 type EnergyFilter struct {
+	Site  *string
 	Group string
 	Name  string
 	Title string
@@ -66,11 +67,14 @@ type EnergyFilter struct {
 // entityQuery returns a subquery selecting the ids of the matching entities,
 // nil for an empty filter.
 func entityQuery(f EnergyFilter) *gorm.DB {
-	if f.Group == "" && f.Name == "" && f.Title == "" {
+	if f.Site == nil && f.Group == "" && f.Name == "" && f.Title == "" {
 		return nil
 	}
 
 	tx := db.Instance.Model(new(entity)).Select("id")
+	if f.Site != nil {
+		tx = tx.Where("site = ?", *f.Site)
+	}
 	if f.Group != "" {
 		tx = tx.Where(`"group" = ?`, f.Group)
 	}

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
@@ -85,13 +87,24 @@ func (site *Site) publishVehicles() {
 
 // updateVehicles adds or removes a vehicle asynchronously
 func (site *Site) updateVehicles(op config.Operation, dev config.Device[api.Vehicle]) {
+	idx := slices.IndexFunc(site.vehicles, func(existing config.Device[api.Vehicle]) bool {
+		return existing.Config().Name == dev.Config().Name
+	})
 	vehicle := dev.Instance()
 
 	switch op {
 	case config.OpAdd:
+		if idx >= 0 {
+			return
+		}
+		site.vehicles = append(site.vehicles, dev)
 		site.coordinator.Add(vehicle)
 
 	case config.OpDelete:
+		if idx < 0 {
+			return
+		}
+		site.vehicles = slices.Delete(site.vehicles, idx, idx+1)
 		site.coordinator.Delete(vehicle)
 	}
 
@@ -102,18 +115,17 @@ func (site *Site) updateVehicles(op config.Operation, dev config.Device[api.Vehi
 var _ site.Vehicles = (*vehicles)(nil)
 
 type vehicles struct {
-	log *util.Logger
+	log     *util.Logger
+	devices []config.Device[api.Vehicle]
 }
 
 func (vv *vehicles) Instances() []api.Vehicle {
-	return config.Instances(config.Vehicles().Devices())
+	return config.Instances(vv.devices)
 }
 
 func (vv *vehicles) Settings() []vehicle.API {
-	devs := config.Vehicles().Devices()
-
-	res := make([]vehicle.API, 0, len(devs))
-	for _, dev := range devs {
+	res := make([]vehicle.API, 0, len(vv.devices))
+	for _, dev := range vv.devices {
 		// skip disabled vehicles
 		if dev.Instance() == nil {
 			continue
@@ -125,10 +137,10 @@ func (vv *vehicles) Settings() []vehicle.API {
 }
 
 func (vv *vehicles) ByName(name string) (vehicle.API, error) {
-	dev, err := config.Vehicles().ByName(name)
-	if err != nil {
-		return nil, err
+	for _, dev := range vv.devices {
+		if dev.Config().Name == name {
+			return vehicle.Adapter(vv.log, dev), nil
+		}
 	}
-
-	return vehicle.Adapter(vv.log, dev), nil
+	return nil, fmt.Errorf("vehicle not found: %s", name)
 }

@@ -69,23 +69,35 @@ func namedSeq(configurable []config.Config) iter.Seq[config.Named] {
 }
 
 func collectSiteRefs(conf globalconfig.All) error {
-	var refs struct {
-		Meters     core.MetersConfig `mapstructure:"meters"`     // Meter references
-		Curtailers []string          `mapstructure:"curtailers"` // Curtailment device references
-		Other      map[string]any    `mapstructure:",remain"`
+	sites := []map[string]any{conf.Site}
+	if len(conf.Sites) > 0 {
+		sites = make([]map[string]any, 0, len(conf.Sites))
+		for _, site := range conf.Sites {
+			sites = append(sites, site.Other)
+		}
 	}
 
-	if err := util.DecodeOther(conf.Site, &refs); err != nil {
-		return err
-	}
+	for _, site := range sites {
+		var refs struct {
+			Meters     core.MetersConfig `mapstructure:"meters"`     // Meter references
+			Curtailers []string          `mapstructure:"curtailers"` // Curtailment device references
+			Other      map[string]any    `mapstructure:",remain"`
+		}
+		if err := util.DecodeOther(site, &refs); err != nil {
+			return err
+		}
 
-	references.meter = append(references.meter, refs.Meters.GridMeterRef)
-	references.meter = append(references.meter, refs.Meters.PVMetersRef...)
-	references.meter = append(references.meter, refs.Meters.BatteryMetersRef...)
-	references.meter = append(references.meter, refs.Meters.ExtMetersRef...)
-	references.meter = append(references.meter, refs.Meters.AuxMetersRef...)
-	references.meter = append(references.meter, refs.Meters.ConsumerMetersRef...)
-	references.curtailer = append(references.curtailer, refs.Curtailers...)
+		references.meter = append(references.meter, refs.Meters.GridMeterRef)
+		references.meter = append(references.meter, refs.Meters.PVMetersRef...)
+		references.meter = append(references.meter, refs.Meters.BatteryMetersRef...)
+		references.meter = append(references.meter, refs.Meters.ExtMetersRef...)
+		references.meter = append(references.meter, refs.Meters.AuxMetersRef...)
+		references.meter = append(references.meter, refs.Meters.ConsumerMetersRef...)
+		references.curtailer = append(references.curtailer, refs.Curtailers...)
+	}
+	for _, site := range conf.Sites {
+		references.tariff = slices.AppendSeq(references.tariff, site.Tariffs.Used())
+	}
 
 	// append devices from settings
 	if v, err := settings.String(keys.GridMeter); err == nil && v != "" {

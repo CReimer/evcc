@@ -10,6 +10,7 @@ import (
 type DB struct {
 	log  *util.Logger
 	db   *gorm.DB
+	site string
 	name string
 }
 
@@ -17,7 +18,7 @@ var sessions Sessions
 
 func init() {
 	db.Register(func(db *gorm.DB) error {
-		if err := db.AutoMigrate(new(Session)); err != nil {
+		if err := setupSchema(db); err != nil {
 			return err
 		}
 
@@ -25,13 +26,30 @@ func init() {
 	})
 }
 
+func setupSchema(db *gorm.DB) error {
+	if err := db.AutoMigrate(new(Session)); err != nil {
+		return err
+	}
+	return db.Exec("UPDATE sessions SET site = '' WHERE site IS NULL").Error
+}
+
 // NewStore creates a session store
-func NewStore(name string, db *gorm.DB) (*DB, error) {
-	err := db.AutoMigrate(new(Session))
+func NewStore(name string, db *gorm.DB, site ...string) (*DB, error) {
+	err := setupSchema(db)
+	siteName := ""
+	if len(site) > 0 {
+		siteName = site[0]
+	}
+	if err == nil && siteName != "" {
+		legacyName := siteName + "/" + name
+		err = db.Model(new(Session)).Where("COALESCE(site, '') = '' AND loadpoint IN ?", []string{legacyName, name}).
+			Updates(map[string]any{"site": siteName, "loadpoint": name}).Error
+	}
 
 	sessiondb := &DB{
 		log:  util.NewLogger("db"),
 		db:   db,
+		site: siteName,
 		name: name,
 	}
 
@@ -41,6 +59,7 @@ func NewStore(name string, db *gorm.DB) (*DB, error) {
 // New creates a charging session
 func (s *DB) New(meter float64) *Session {
 	t := Session{
+		Site:      s.site,
 		Loadpoint: s.name,
 	}
 
@@ -68,7 +87,7 @@ func (s *DB) Sessions() (Sessions, error) {
 
 func (s *DB) ClosePendingSessionsInHistory(chargeMeterTotal float64) error {
 	var res Sessions
-	if tx := s.db.Find(&res, map[string]any{"finished": "0001-01-01 00:00:00+00:00", "Loadpoint": s.name}); tx.Error != nil {
+	if tx := s.db.Find(&res, map[string]any{"finished": "0001-01-01 00:00:00+00:00", "site": s.site, "loadpoint": s.name}); tx.Error != nil {
 		return tx.Error
 	}
 
@@ -76,7 +95,7 @@ func (s *DB) ClosePendingSessionsInHistory(chargeMeterTotal float64) error {
 		var nextSession Session
 
 		var tx *gorm.DB
-		if tx = s.db.Limit(1).Order("ID").Find(&nextSession, "ID > ? AND Loadpoint = ?", session.ID, s.name); tx.Error != nil {
+		if tx = s.db.Limit(1).Order("ID").Find(&nextSession, "ID > ? AND site = ? AND loadpoint = ?", session.ID, s.site, s.name); tx.Error != nil {
 			return tx.Error
 		}
 

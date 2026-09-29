@@ -13,7 +13,7 @@ func init() {
 	})
 }
 
-func UpdateSession(id *uint, typ Type, circuitPower, limit float64, active bool) error {
+func UpdateSession(id *uint, owner any, typ Type, circuitPower, limit float64, active bool) error {
 	// start session
 	if active && *id == 0 {
 		var power *float64
@@ -21,7 +21,7 @@ func UpdateSession(id *uint, typ Type, circuitPower, limit float64, active bool)
 			power = new(circuitPower)
 		}
 
-		sid, err := StartManage(typ, power, limit)
+		sid, err := StartManage(siteName(owner), typ, power, limit)
 		if err != nil {
 			return err
 		}
@@ -41,15 +41,23 @@ func UpdateSession(id *uint, typ Type, circuitPower, limit float64, active bool)
 	return nil
 }
 
-func StartManage(typ Type, grid *float64, limit float64) (uint, error) {
+func StartManage(site string, typ Type, grid *float64, limit float64) (uint, error) {
 	gs := GridSession{
 		Created:    time.Now(),
+		Site:       site,
 		Type:       typ,
 		GridPower:  grid,
 		LimitPower: limit,
 	}
 	tx := db.Instance.Save(&gs)
 	return gs.ID, tx.Error
+}
+
+func siteName(owner any) string {
+	if named, ok := owner.(interface{ GetName() string }); ok {
+		return named.GetName()
+	}
+	return ""
 }
 
 func StopManage(id uint) error {

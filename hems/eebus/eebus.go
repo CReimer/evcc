@@ -336,7 +336,7 @@ func (c *EEBus) setConsumptionLimit(limit float64) {
 	active := limit > 0
 	c.consumptionLimitActivated = activatedAt(active)
 
-	if err := smartgrid.UpdateSession(&c.smartgridConsumptionId, smartgrid.Dim, c.site.GetGridPower(), limit, active); err != nil {
+	if err := smartgrid.UpdateSession(&c.smartgridConsumptionId, c.site, smartgrid.Dim, c.site.GetGridPower(), limit, active); err != nil {
 		c.log.ERROR.Printf("smartgrid session: %v", err)
 	}
 
@@ -350,7 +350,7 @@ func (c *EEBus) setConsumptionLimit(limit float64) {
 func (c *EEBus) setProductionLimit(limit float64, active bool) {
 	c.productionLimitActivated = activatedAt(active)
 
-	if err := smartgrid.UpdateSession(&c.smartgridProductionId, smartgrid.Curtail, c.site.GetGridPower(), limit, active); err != nil {
+	if err := smartgrid.UpdateSession(&c.smartgridProductionId, c.site, smartgrid.Curtail, c.site.GetGridPower(), limit, active); err != nil {
 		c.log.ERROR.Printf("smartgrid session: %v", err)
 	}
 }

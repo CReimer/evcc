@@ -62,9 +62,21 @@ type All struct {
 	Vehicles        []config.Named
 	Tariffs         Tariffs
 	Site            map[string]any
+	Sites           []Site
 	Loadpoints      []config.Named
 	Circuits        []config.Named
 	Curtailers      []config.Named
+}
+
+// Site describes an independent energy balance domain.
+// Other contains the regular site configuration such as title and meters.
+type Site struct {
+	Name       string         `json:"name"`
+	Loadpoints []string       `json:"loadpoints"`
+	Circuit    string         `json:"circuit"`
+	Tariffs    TariffRefs     `json:"tariffs"`
+	HEMS       Hems           `json:"hems"`
+	Other      map[string]any `mapstructure:",remain" yaml:",inline"`
 }
 
 type Javascript struct {

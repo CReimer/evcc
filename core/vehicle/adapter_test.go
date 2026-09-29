@@ -5,6 +5,7 @@ import (
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/keys"
+	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/db/settings"
 	"github.com/evcc-io/evcc/util"
 	"github.com/stretchr/testify/assert"
@@ -58,4 +59,27 @@ func TestAdapterGetModeMigratesLegacy(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "smart", s, "migration persisted")
 	}
+}
+
+func TestSiteCallbacksDoNotOverwriteEachOther(t *testing.T) {
+	callbacks.Lock()
+	callbacks.publishers = nil
+	callbacks.owners = nil
+	callbacks.Unlock()
+	t.Cleanup(func() {
+		callbacks.Lock()
+		callbacks.publishers = nil
+		callbacks.owners = nil
+		callbacks.Unlock()
+	})
+
+	var published, owners int
+	RegisterCallbacks(func() { published++ }, func(api.Vehicle) loadpoint.API { owners++; return nil })
+	RegisterCallbacks(func() { published++ }, func(api.Vehicle) loadpoint.API { owners++; return nil })
+
+	v := &adapter{log: util.NewLogger("foo")}
+	v.publish()
+	assert.Nil(t, v.owner())
+	assert.Equal(t, 2, published)
+	assert.Equal(t, 2, owners)
 }

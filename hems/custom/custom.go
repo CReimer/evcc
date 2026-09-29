@@ -138,7 +138,7 @@ func (c *Custom) runDim() error {
 
 	c.setConsumptionLimit(limit)
 
-	if err := smartgrid.UpdateSession(&c.smartgridConsumptionID, smartgrid.Dim, c.site.GetGridPower(), limit, limit > 0); err != nil {
+	if err := smartgrid.UpdateSession(&c.smartgridConsumptionID, c.site, smartgrid.Dim, c.site.GetGridPower(), limit, limit > 0); err != nil {
 		return fmt.Errorf("smartgrid session: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func (c *Custom) runCurtail() error {
 		limit = float64(percent) / 100 * c.productionNominalMax
 	}
 
-	if err := smartgrid.UpdateSession(&c.smartgridProductionID, smartgrid.Curtail, c.site.GetGridPower(), limit, active); err != nil {
+	if err := smartgrid.UpdateSession(&c.smartgridProductionID, c.site, smartgrid.Curtail, c.site.GetGridPower(), limit, active); err != nil {
 		return fmt.Errorf("smartgrid session: %v", err)
 	}
 

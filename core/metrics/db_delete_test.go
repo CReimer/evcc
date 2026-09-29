@@ -55,6 +55,28 @@ func TestDeleteEnergy(t *testing.T) {
 	require.Zero(t, count())
 }
 
+func TestDeleteEnergySiteScope(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	home := entity{Site: "home_1", Name: "pv", Group: PV}
+	office := entity{Site: "homeA1", Name: "pv", Group: PV}
+	require.NoError(t, db.Instance.Create(&home).Error)
+	require.NoError(t, db.Instance.Create(&office).Error)
+	base := time.Now().Truncate(15 * time.Minute)
+	require.NoError(t, persist(home, base, 1, 0, nil, false))
+	require.NoError(t, persist(office, base, 2, 0, nil, false))
+
+	site := "home_1"
+	rows, err := DeleteEnergy(base, base.Add(15*time.Minute), EnergyFilter{Site: &site})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rows)
+
+	var remaining meter
+	require.NoError(t, db.Instance.First(&remaining).Error)
+	require.Equal(t, office.Id, remaining.Meter)
+}
+
 func TestDeleteTariffs(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, db.Instance.AutoMigrate(new(tariffValue)))

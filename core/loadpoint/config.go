@@ -9,6 +9,7 @@ import (
 
 type StaticConfig struct {
 	// static config
+	Site    string `json:"site,omitempty"`
 	Charger string `json:"charger,omitempty"`
 	Meter   string `json:"meter,omitempty"`
 	Circuit string `json:"circuit,omitempty"`

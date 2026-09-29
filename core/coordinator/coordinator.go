@@ -58,6 +58,9 @@ func (c *Coordinator) Add(vehicle api.Vehicle) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if slices.Contains(c.vehicles, vehicle) {
+		return
+	}
 	c.vehicles = append(c.vehicles, vehicle)
 }
 

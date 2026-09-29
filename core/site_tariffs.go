@@ -181,7 +181,7 @@ func (site *Site) persistTariffs() {
 		return nil
 	}
 
-	if err := metrics.PersistTariffs(slot,
+	if err := metrics.PersistSiteTariffs(site.name, slot,
 		value(api.TariffUsageGrid),
 		value(api.TariffUsageFeedIn),
 		value(api.TariffUsageCo2),
